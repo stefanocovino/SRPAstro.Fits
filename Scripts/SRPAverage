@@ -1,0 +1,142 @@
+#! python
+""" Code to average FITS frames
+
+Context : SRP
+Module  : SRPAverage.py
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the average of frame FITS files.
+
+Usage   : SRPAverage [-v] [-h] -i arg1 -o arg2
+            -i Input FITS file list
+            -o Output FITS file
+
+History : (27/05/2003) First version.
+        : (29/05/2003) Better management of headers.
+        : (18/12/2003) Minor corrections.
+        : (03/02/2005) Optparse.
+        : (11/09/2009) Minor correction.
+        : (18/04/2011) Code without the python eclipse library.
+        : (07/08/2011) Better cosmetics.
+        : (20/05/2012) Better import style.
+        : (31/07/2015) python3 porting.
+        : (18/05/2017) Minor update.
+"""
+
+
+
+import os, os.path, sys
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+from SRPFITS.Fits.GetHeader import GetHeader
+import SRP.SRPUtil as SRPUtil
+from SRP.SRPSystem.Pipe import Pipe
+from SRP.SRPSystem.Which import Which
+
+
+
+parser = OptionParser(usage="usage: %prog [-v] [-h] -i arg1 -o arg2", version="%prog 1.4.1")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-o", "--outfile", action="store", nargs=1, type="string", dest="outfitsfile", help="Output FITS file")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist and options.outfitsfile:
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    #
+    if Which(SRPConstants.SRPcatcube) == None:
+        parser.error("%s package not found." % SRPConstants.SRPcatcube)
+    if Which(SRPConstants.SRPstcube) == None:
+        parser.error("%s package not found." % SRPConstants.SRPstcube)
+    if Which(SRPConstants.SRPaverage) == None:
+        parser.error("%s package not found." % SRPConstants.SRPaverage)
+    #
+    if os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        flist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                flist.append(dt.strip().split()[0])
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+        #
+        ch = GetHeader(flist[0])[0]
+        irange = SRPUtil.getRange(ch)
+        #
+        if options.verbose:
+            print("Loading frames...")
+        msg = ' '
+        for ff in flist:
+            msg = msg + ff + ' '
+        cmd = SRPConstants.SRPcatcube+msg+' -o %s' % SRPConstants.SRPTempFile
+        res = Pipe(cmd)
+        #print cmd
+        #print res
+        if res == None or not os.path.isfile(SRPConstants.SRPTempFile):
+            print("Average file can not be generated.")
+            sys.exit(SRPConstants.SRPExitFailure)
+        #
+        grange = SRPUtil.getGoodRange(irange,10.0)
+        if options.verbose:
+            print("Statistics computation...")
+        #
+        cbstat = []
+        for ff in flist:
+            cmd = SRPConstants.SRPstcube+" -z '%d %d %d %d' %s" % (grange[0],grange[2],grange[1],grange[3],ff)
+            res = Pipe(cmd)
+            if res == None:
+                print("Statistics for file %s can not be computed." % ff)
+                sys.exit(SRPConstants.SRPExitFailure)            
+            cbstat.append(res.decode().split(os.linesep)[5])
+        if options.verbose:
+            for i in range(len(flist)):
+                if (i == 0):
+                    print("%5s %10s %10s %10s" % ("Frame", "average", "stdev", "median"))
+                print("%5d %10s %10s %10s" % (i+1, cbstat[i].split()[3], cbstat[i].split()[5], cbstat[i].split()[4]))
+        if options.verbose:
+            print("Computing average...")
+        #
+        cmd = SRPConstants.SRPaverage+' -i %s -o %s' % (SRPConstants.SRPTempFile, sname+options.outfitsfile)
+        res = Pipe(cmd)
+        #print cmd
+        #print res
+        if res == None:
+            print("Average file can not be generated.")
+            sys.exit(SRPConstants.SRPExitFailure)        
+        if options.verbose:
+            print("Saving average file: %s" % sname+options.outfitsfile)
+        if options.verbose:
+            print("Computing statistics on average frame...")
+        #
+        cmd = SRPConstants.SRPstcube+" -z '%d %d %d %d' %s" % (grange[0],grange[2],grange[1],grange[3],sname+options.outfitsfile)
+        res = Pipe(cmd)
+        if res == None:
+            print("Statistics for average file can not be computed.")
+            sys.exit(SRPConstants.SRPExitFailure)  
+        saver = res.decode().split(os.linesep)[5]
+        if options.verbose:
+            print("%5s %10s %10s %10s" % ("", "average", "stdev", "median"))
+            print("%5s %10s %10s %10s" % ("AVERAGE", saver.split()[3], saver.split()[5], saver.split()[4]))
+        #
+        os.remove(SRPConstants.SRPTempFile)
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

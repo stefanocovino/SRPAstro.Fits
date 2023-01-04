@@ -1,0 +1,177 @@
+#! python
+""" Code to extract objects from a local catalogue
+
+Context : SRP
+Module  : SRPZeroPoint.py
+Version : 1.1.3
+Status  : approved
+Author  : Stefano Covino
+Date    : 02/06/2021
+E-mail  : stefano.covino@brera.inaf.astro.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the extraction of objects from a local catalogue
+
+Usage   : SRPZeroPoint [-a arg1] -c arg2 -C arg3 arg4 arg5 arg6 arg7 [-h] -i arg8 -I arg9 arg10 arg11 arg12 arg13 arg14 [-t arg15] [-v] [-z arg16]
+            -a Extinction coefficient (mag/airmass)
+            -c File with catalogue magnitudes
+            -C Column positions for Id RA DEC Mag eMag
+            -i File with instrumental magnitudes (at 1s)
+            -I Column positions for Id RA DEC Mag eMag Airmass
+            -t Maximum tolerance for object association (arcsec)
+            -z Zero-point for instrumental magnitudes
+ 
+
+History : (30/09/2010) First version.
+        : (06/10/2010) Better input catalogue magnitude filtering.
+        : (13/10/2010) Case with matches with no good magnitudes.
+        : (14/10/2010) Case with difference error exactly = 0.
+        : (24/10/2010) Cases with no matches.
+        : (13/11/2010) Better delta magnitude average determination.
+        : (27/03/2012) Bug for badly formatted files.
+        : (27/01/2016) python3 porting.
+        : (02/06/2021) SRPSTATS porting.
+"""
+
+
+
+import math, sys
+from optparse import OptionParser
+
+from SRP.SRPMath.AngularDistance import AngularDistance
+from SRP.SRPMath.AstroCoordInput import AstroCoordInput
+from SRPSTATS.AverIterSigmaClipp import AverIterSigmaClipp
+
+
+
+ID = 0
+RA = 1
+DEC = 2
+MAG = 3
+EMAG = 4
+AIRM = 5
+
+
+
+parser = OptionParser(usage="usage: %prog [-a arg1] -c arg2 -C arg3 arg4 arg5 arg6 arg7 [-h] -i arg8 -I arg9 arg10 arg11 arg12 arg13 arg14 [-t arg15] [-v] [-z arg16]", version="%prog 1.1.2")
+parser.add_option("-a", "--airmcoeff", action="store", nargs=1, type="float", dest="airmcoeff", default=0.0, help="Extinction coefficient (mag/airmass)")
+parser.add_option("-c", "--catmag", action="store", nargs=1, type="string", dest="catstr", help="File with catalogue magnitudes")
+parser.add_option("-C", "--catpos", action="store", nargs=5, type="int", dest="catpos", help="Column positions for Id RA DEC Mag eMag")
+parser.add_option("-i", "--instrmag", action="store", nargs=1, type="string", dest="instr", help="File with instrumental magnitudes (at 1s)")
+parser.add_option("-I", "--instrpos", action="store", nargs=6, type="int", dest="instrpos", help="Column positions for Id RA DEC Mag eMag Airmass")
+parser.add_option("-t", "--tolerance", action="store", nargs=1, type="float", dest="tol", default=5.0, help="Maximum tolerance for object association (arcsec)")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-z", "--zeropoint", action="store", nargs=1, type="float", dest="zp", default=25.0, help="Zero-point for instrumental magnitudes")
+(options, args) = parser.parse_args()
+
+
+if options.instr and options.instrpos and options.catstr and options.catpos:
+    # files
+    try:
+        inpi = open(options.instr)
+    except IOError:
+        parser.error("File %s can not be accessed." % options.instr)
+    try:
+        inpc = open(options.catstr)
+    except IOError:
+        parser.error("File %s can not be accessed." % options.catstr)        
+    # columns
+    for i in options.instrpos:
+        if i < 1:
+            parser.error("Column numbers must be grater than 1.")
+    for i in options.catpos:
+        if i < 1:
+            parser.error("Column numbers must be grater than 1.")
+    # extinction
+    if options.airmcoeff < 0.0:
+        parser.error("Extinction coefficient must be positive.")
+    # tolerance
+    if options.tol <= 0.0:
+        parser.error("Tolerance must be positive.")
+    # Find objects
+    # read lines
+    dti = inpi.readlines()
+    dtc = inpc.readlines()
+    inpi.close()
+    inpc.close()
+    #
+    inpdata = []
+    catdata = []
+    for i in dti:
+        il = i.split()
+        if len(il) >= 4:
+            try:
+                inpdata.append((il[options.instrpos[ID]-1],il[options.instrpos[RA]-1],il[options.instrpos[DEC]-1],il[options.instrpos[MAG]-1],il[options.instrpos[EMAG]-1],il[options.instrpos[AIRM]-1]))
+            except IndexError:
+                parser.error("Input file %s does not contain enough columns:" % options.instr)
+    for i in dtc:
+        il = i.split()
+        if len(il) >= 4:
+            try:
+                catdata.append((il[options.catpos[ID]-1],il[options.catpos[RA]-1],il[options.catpos[DEC]-1],il[options.catpos[MAG]-1],il[options.catpos[EMAG]-1]))
+            except IndexError:
+                parser.error("Input file %s does not contain enough columns:" % options.catstr)
+    #
+    matches = []
+    assflag = [False for c in inpdata]
+    for i in range(len(catdata)):
+        mindist = 60
+        assobj = None
+        fcoord = AstroCoordInput(catdata[i][RA],catdata[i][DEC])
+        for l in range(len(inpdata)):
+            if not assflag[l]:
+               scoord = AstroCoordInput(inpdata[l][RA],inpdata[l][DEC])
+               angdist = AngularDistance((fcoord.RA,fcoord.DEC),(scoord.RA,scoord.DEC))*3600.0
+               if angdist < mindist:
+                mindist = angdist
+                assobj = l
+        if mindist <= options.tol:
+            # Object associated
+            matches.append((catdata[i],inpdata[assobj]))
+            assflag[assobj] = True
+            #print i,catdata[i],assobj,inpdata[assobj],mindist
+    # Prepare set of fluxes ratios
+    couples = []
+    for i in matches:
+        try:
+            magc = float(i[0][MAG])
+            emagc = float(i[0][EMAG])
+        except ValueError:
+            print("Incorrect data: %s,%s in file %s." % (i[0][MAG],i[0][EMAG],options.catstr))
+            sys.exit(1)
+        try:
+            airmi = float(i[1][AIRM])
+            magi = float(i[1][MAG]) - airmi*options.airmcoeff
+            emagi = float(i[1][EMAG])
+        except ValueError:
+            print("Incorrect data: %s,%s,%s in file %s." % (i[1][MAG],i[1][EMAG],i[1][AIRM],options.instr))
+            sys.exit(1)
+        if 5 < magc < 50 and -30 < magi < 50:
+            magdif = magc - magi
+            emagdif = math.sqrt(emagc**2 + emagi**2)
+            # case with zero error
+            if emagdif <= 0.0:
+                emagdif = 0.001
+#            magflux = 10**(-0.4*magdif)
+#            emagflux = emagdif*magflux/(2.5/math.log(10.0))
+#            couples.append((magflux,emagflux/magflux))
+            couples.append((magdif,emagdif))
+    #
+    meanflux = AverIterSigmaClipp(couples,3.)
+    #print meanflux
+    #
+    if meanflux[0] != None:
+#        meanmdif = -2.5*math.log10(meanflux[0])
+#        meanemdif = (2.5/math.log(10.0))*(meanflux[2]/meanflux[0])
+        meanmdif = meanflux[0]
+        meanemdif = meanflux[2]
+        mnstars = meanflux[4]
+    else:
+        meanmdif = -99-options.zp
+        meanemdif = -99
+        mnstars = 0
+    if options.verbose:
+        print("Computed zero point: %.3f +/- %.3f with %d objects" % (meanmdif+options.zp, meanemdif, mnstars))
+    else:
+        print("%.3f %.3f %d" % (meanmdif+options.zp, meanemdif, mnstars))
+else:
+    parser.print_help()

@@ -1,0 +1,119 @@
+#! python
+""" Code to create SRP Keyword list
+
+Context : SRP
+Module  : SRPKeywords.py
+Version : 1.3.4
+Author  : Stefano Covino
+Date    : 21/05/2012
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the creation of a SRP Kwyword list
+
+Usage   : SRPKeywords [-h] -f arg / -p arg [-v] arg
+            -f is the name of a FITS file to be used as a teplate for FITS keyword selection
+            -p is a set of pre-chosen FITS headers for several instrument/telescope combinations.
+            If you are not sure, try with any letter and you will be prompted with a list of
+            available combinations.
+
+
+Remarks : 
+
+History : (22/05/2003) First version.
+        : (12/06/2003) New messages.
+        : (15/06/2003) Pre-selected keyword files.
+        : (03/02/2005) Optparse.
+        : (13/04/2006) Porting to cygwin.
+        : (11/09/2009) Better pipes
+        : (14/05/2011) Re-indented.
+        : (04/06/2011) Bug in sorted output.
+        : (21/05/2012) Better import style.
+"""
+
+
+
+import os, os.path, string
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from SRP.SRPSystem.Pipe import Pipe
+from SRP.SRPSystem.Which import Which
+
+
+
+parser = OptionParser(usage="usage: %prog [-h] -f arg / -p arg [-v]", version="%prog 1.3.4")
+parser.add_option("-f", "--file", action="store", nargs=1, type="string", dest="fitsfilename", help="Input FITS file")
+parser.add_option("-p", "--predef", action="store", nargs=1, type="string", dest="predeffile", help="Pre-selected keyword list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilename and not options.predeffile:
+    if os.path.isfile(options.fitsfilename):
+        if options.verbose:
+            print("FITS file name is: %s." % options.fitsfilename)
+        if Which(SRPConstants.SRPdfits) == None and Which(SRPConstants.SRPdfits_cyg) == None:
+            parser.error("Eclipse package not found.")
+        ky = Pipe(SRPConstants.SRPdfits+' '+options.fitsfilename)
+        if ky == None:
+            parser.error("%s not a FITS file." % options.fitsfilename)
+        kyl = string.split(ky,os.linesep)
+        nkey = 0
+        for i in range(1,len(kyl)):
+            if kyl[i] != '' and string.split(kyl[i])[0] != 'HISTORY':
+                nkey = nkey + 1
+        if options.verbose:
+            print("%sNumber of keywords to be analyzed: %d." % (SRPConstants.SRPTab, nkey))
+            print("%sPossible answers: y=Yes, s=Stop, n=No." % SRPConstants.SRPTab)
+        listkey = []
+        nlistkey = 1
+        for i in range(1,len(kyl)):
+            if kyl[i] != '' and string.split(kyl[i])[0] != 'HISTORY':
+                print("%d: %s" % (nlistkey, kyl[i]))
+                nlistkey = nlistkey + 1
+                answ = input("Would you like to select this keyword (y/s/n)? ")
+                if string.upper(answ) == SRPConstants.SRPPosAnsw:
+                    listkey.append(string.split(kyl[i],"=")[0])
+                    if options.verbose:
+                        print("Present keyword list:")
+                        for i in range(len(listkey)):
+                            print(SRPConstants.SRPTab+listkey[i])
+                elif string.upper(answ) == SRPConstants.SRPEnd:
+                    break
+        if options.verbose:
+            print("Final keyword list: ")
+            for i in range(len(listkey)):
+                print(SRPConstants.SRPTab+listkey[i])
+        if len(listkey) > 0:
+            sessname = SRPFiles.getSRPSessionName()
+            sf = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,sessname+SRPConstants.SRPKeyFile,SRPFiles.WriteMode)
+            sf.SRPOpenFile()
+            for i in range(len(listkey)):
+                sf.SRPWriteFile(listkey[i]+os.linesep)
+            sf.SRPCloseFile()
+        else:
+            parser.error("No keywords selected.")
+    else:
+        parser.error("%s not found." % options.fitsfilename)
+elif not options.fitsfilename and options.predeffile:
+    if options.predeffile in list(SRPConstants.SRPPREKEYDICT.keys()):
+        kwli = SRPConstants.SRPPREKEYDICT[options.predeffile]
+        if options.verbose:
+            print("Final keyword list: ")
+            print(SRPConstants.SRPPREKEYDICT[options.predeffile])
+        sessname = SRPFiles.getSRPSessionName()
+        sf = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,sessname+SRPConstants.SRPKeyFile,SRPFiles.WriteMode)
+        sf.SRPOpenFile()
+        sf.SRPWriteFile(kwli)
+        sf.SRPCloseFile()
+    else:
+        print("Available pre-selected keyword lists: ")
+        cl = list(SRPConstants.SRPPREKEYDICT.keys())
+        cl.sort()
+        for entr in cl:
+            print(entr)
+        if options.verbose:
+            print("Pre-selected keyword list %s not recognized." % options.predeffile)
+else:
+    parser.print_help()

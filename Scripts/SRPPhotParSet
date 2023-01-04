@@ -1,0 +1,66 @@
+#! python
+""" Code to create SRP SExtractor parameter set
+
+Context : SRP
+Module  : SRPPhotParSet
+Version : 2.0.2
+Author  : Stefano Covino
+Date    : 16/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the creation of a SRP SExtractor parameter set
+
+Usage   : SRPPhotParSet [-h] [-g / -p arg] [-v] 
+            -g Generic SExtractor parameter set
+            -p Pre-selected SExtractor parameter sets
+
+History : (20/09/2003) First version.
+        : (03/02/2005) Optparse.
+        : (14/07/2005) REM/ROSS parameter set.
+        : (09/10/2008) REMIR parameter set.
+        : (28/09/2010) Code rewritten and TNG-LRS parameter set added.
+        : (07/08/2011) Better cosmetics.
+        : (16/05/2017) Minor update.
+"""
+
+
+
+from optparse import OptionParser
+import os.path, shutil
+from SRPFITS.Frames import SExtractorConstants
+
+
+parser = OptionParser(usage="usage: %prog [-h] [-g / -p arg] [-v]", version="%prog 2.0.2")
+parser.add_option("-g", "--generic", action="store_true", dest="generic", help="Generic SExtractor parameter set")
+parser.add_option("-p", "--predef", action="store", nargs=1, type="string", dest="predeffile", help="Pre-selected SExtractor parameter sets")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.predeffile or options.generic:
+    if options.predeffile and options.generic:
+        parser.error("You can select a generic or a pre-defined parameter set.")
+    if options.predeffile:
+        if options.predeffile in list(SExtractorConstants.SRPSEXPARDICT.keys()):
+            if options.verbose:
+                print("Creating SExtractor parameter set: %s." % options.predeffile)
+            for i in range(len(SExtractorConstants.SRPSEXPARDICT[options.predeffile])):
+                shutil.copyfile(os.path.join(SExtractorConstants.BasePath,SExtractorConstants.SRPSEXPARDICT[options.predeffile][i]),os.path.join('.',SExtractorConstants.SexFName[i]))
+        else:
+            print("Available pre-selected SExtractor parameter sets: ")
+            parlist = list(SExtractorConstants.SRPSEXPARDICT.keys())
+            parlist.sort()
+            for entr in parlist:
+                print(entr)
+            if options.verbose:
+                print("Pre-selected SExtractor parameter set %s not recognized." % options.predeffile)
+    elif options.generic:
+        if options.verbose:
+            print("Creating default SExtractor parameter set.")
+        for i in range(len(SExtractorConstants.GenParSet)):
+            shutil.copyfile(os.path.join(SExtractorConstants.BasePath,SExtractorConstants.GenParSet[i]),os.path.join('.',SExtractorConstants.SexFName[i]))
+        if options.verbose:
+            print("SExctractor default parameter files created.")
+else:
+    parser.error("A generic or pre-defined parameter set must be selected.")
+    

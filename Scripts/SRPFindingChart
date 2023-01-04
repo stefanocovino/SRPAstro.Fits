@@ -1,0 +1,116 @@
+#! python
+""" Code to generate a finding-chart for a specific frame
+
+Context : SRP
+Module  : SRPFindingChart
+Version : 1.0.3
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPFindingChart [-c arg1 arg2] -f arg3 [-h] [-l arg4] [-o arg5 arg6] [-r arg7] [-s arg8] [-t arg9] [-v]
+            -c Image cuts (min max)
+            -f Fits file name
+            -l Object label
+            -o Object coordinates (RAH:RAM:RAS DECD:DECM:DECS)
+            -r Object circle radius (arcsec)
+            -t Finding-chart title
+            -s Finding-chart size (arcmin)
+ 
+
+History : (19/07/2010) First version.
+        : (19/12/2010) Better importing style.
+        : (24/08/2011) Better cosmetics.
+        : (18/05/2017) Minor update.
+"""
+
+import matplotlib
+matplotlib.use('Agg')
+from optparse import OptionParser
+from SRPFITS.Fits.FitsImageClass import FitsImage
+from SRPFITS.Fits import FitsConstants
+import astLib.astPlots as aLaP
+import astLib.astCoords as aLaC
+import astLib.astImages as aLaI
+import os.path
+
+
+parser = OptionParser(usage="usage: %prog [-c arg1 arg2] -f arg3 [-h] [-l arg4] [-o arg5 arg6] [-r arg7] [-s arg8] [-t arg9] [-v]", version="%prog 1.0.3")
+parser.add_option("-c", "--cuts", action="store", nargs=2, type="float", dest="cuts", help="Image cuts (min max)")
+parser.add_option("-f", "--fits", action="store", nargs=1, type="string", dest="fits", help="Fits file name")
+parser.add_option("-l", "--label", action="store", nargs=1, type="string", dest="label", help="Object label")
+parser.add_option("-o", "--object", action="store", nargs=2, type="string", dest="object", help="Object coordinates (RAH:RAM:RAS DECD:DECM:DECS)")
+parser.add_option("-r", "--radius", action="store", nargs=1, type="float", default=0.0, dest="radius", help="Object circle radius (arcsec)")
+parser.add_option("-t", "--title", action="store", nargs=1, type="string", dest="title", help="Finding-chart title")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-s", "--size", action="store", nargs=1, default=0.0, type="float", dest="size", help="Finding-chart size (arcmin)")
+(options, args) = parser.parse_args()
+
+if options.fits:
+    # Open file
+    if options.verbose:
+        print("Opening FITS file %s" % options.fits)
+#    d = SRPFits.ObjList(options.fits)
+    d = FitsImage(options.fits)
+    if d==None or d.WCS==None:
+        parser.error("Problem in reading FITS file %s" % options.fits)
+    # Cuts
+    if options.cuts:
+        ocuts = [options.cuts[0],options.cuts[1]]
+    else:
+        ocuts = ["smart",99.0]
+    # Title
+    if options.title:
+        otitle = options.title
+    else:
+        otitle = options.fits
+    # Obj coordinates
+    RA = []
+    DEC = []
+    if options.object:
+        try:
+            rad = aLaC.hms2decimal(options.object[0],':')
+            decd = aLaC.dms2decimal(options.object[1],':')
+            RA.append(rad)
+            DEC.append(decd)
+        except ValueError:
+            parser.error('Problem in reading object coordinates: %s, %s' % options.object)
+    # Obj label
+    olabel = []
+    if options.label:
+        olabel.append(options.label)
+    else:
+        olabel.append('Obj')
+    # Obj radius
+    if options.radius >= 0.0:
+        oradius = options.radius
+    else:
+        parser.error("Object marker radius can not be negative (%g)." % options.radius)
+    # Size
+    if options.size < 0.0:
+        parser.error("Size must be positive (%g)." % options.size)
+    # Generate finding-chart
+    if options.size > 0.0:
+        if options.object:
+            RAC = RA[0]
+            DECC = DEC[0]
+        else:
+            RAC,DECC = d.WCS.getCentreWCSCoords()
+        ndata = aLaI.clipImageSectionWCS(d.Data,d.WCS,RAC,DECC,options.size/60.0)
+        plfc = aLaP.ImagePlot(ndata['data'],ndata['wcs'],cutLevels=ocuts,title=otitle,colorMapName='gist_yarg')
+    else:
+        plfc = aLaP.ImagePlot(d.Data,d.WCS,cutLevels=ocuts,title=otitle,colorMapName='gist_yarg')
+    # scale
+    plfc.addScaleBar('S',60.0,color='red',width=10.0)
+    # Object mark
+    if options.object:
+        plfc.addPlotObjects(RA,DEC,"mk",size=oradius,objLabels=olabel,color='blue')
+    # Save file
+    froot,fext = os.path.splitext(options.fits)
+    if options.verbose:
+        print("Creating file %s." % (froot+FitsConstants.FCExt))
+    plfc.save(froot+FitsConstants.FCExt)
+else:
+	parser.print_help()
+

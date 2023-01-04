@@ -1,0 +1,146 @@
+#! python
+""" Code to convert from RA,DEC to pixel on a specific frame
+
+Context : SRP
+Module  : SRPWCSPixel.py
+Version : 1.1.0
+Author  : Stefano Covino
+Date    : 21/11/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Convert RA,DEC to/from pixel positions on a frame.
+
+Usage   : SRPWCSPixel -c arg1 arg2 [-d] [-h] [-j arg3] -t arg4 [-s] [-v] -w arg5
+            -c Columns for coordinates [i.e. 2 3]
+            -d Decimal degree data in input [i.e. 152.54166 -10.16944]
+            -j Number of header lines to jump
+            -w FITS file with WCS solution
+            -s Sexagesimal data in input [i.e. 10:10:10 -10:10:10]
+            -t Table containing data to convert
+
+
+
+History : (08/04/2011) First version.
+        : (12/09/2011) Better cosmetics.
+        : (21/11/2017) astropy WCS lib.
+"""
+
+
+import string, os
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import astLib.astCoords as ac
+#import astLib.astWCS as aw
+from astropy.wcs import WCS as aWCS
+
+
+
+parser = OptionParser(usage="usage: %prog -c arg1 arg2 [-d] [-h] [-j arg3] [-s] -t arg4 [-v] -w arg5", version="%prog 1.0.1")
+parser.add_option("-c", "--columns", action="store", nargs=2, type="int", dest="col", help="Columns for coordinates [i.e. 2 3]")
+parser.add_option("-d", "--decimal", action="store_true", dest="dec", help="Decimal degree data in input [i.e. 152.54166 -10.16944]")
+parser.add_option("-j", "--jump", action="store", nargs=1, type="int", dest="jump", default=0, help="Number of header lines to jump")
+parser.add_option("-s", "--sexagesimal", action="store_true", dest="sexag", help="Sexagesimal data in input [i.e. 10:10:10 -10:10:10]")
+parser.add_option("-t", "--table", action="store", nargs=1, type="string", dest="table", help="Table containing data to convert")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-w", "--wcs", action="store", nargs=1, type="string", dest="wcs", help="FITS file with WCS solution")
+(options, args) = parser.parse_args()
+
+
+if options.table and options.col and options.wcs:
+    if options.sexag and options.dec:
+        parser.error("Only at most one option between -s and -d.")
+    # Session name
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    # WCS file
+    try:
+        #w1 = aw.WCS(options.wcs,0)
+        w1 = aWCS(options.wcs)
+    except:
+        parser.error("Error in inout FITS file %s." % options.wcs)
+    # Check header jump
+    if options.jump < 0:
+        parser.error("Header lines to jump %d must be positive." % options.jump)
+    # Check columns to manage
+    if options.col[0] <=0 or options.col[1] <= 0:
+        parser.error("Column numbers should be positive.")
+    # Read file
+    f1 = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.table,SRPFiles.ReadMode)
+    f1.SRPOpenFile()
+    if options.verbose:
+        print("Opening %s file." % options.table)
+    if f1.f == None:
+        parser.error("Error in input file %s." % options.table)
+    try:
+        dt1 = f1.SRPReadTotFile()
+    except:
+        parser.error("Error in reading from file %s." % options.table)
+    f1.SRPCloseFile()
+    #
+    if options.verbose:
+        print("Read %d entries." % len(dt1))
+    ddt1 = []
+    if options.jump != 0:
+        for i in range(options.jump,len(dt1)):
+            ddt1.append(dt1[i])
+    else:
+        ddt1 = dt1
+    if options.verbose:
+        print("Selected %d entries." % len(ddt1))
+    # Extract columns
+    lot = ''
+    for i in range(len(ddt1)):
+        try:
+            inp = ddt1[i].split()
+        except:
+            parser.error("Problem in extracting data from file %s." % options.table)
+        if len(inp) > 0:
+            col1 = options.col[0]-1
+            col2 = options.col[1]-1
+            try:
+                l1 = inp[col1]
+                l2 = inp[col2]
+            except IndexError:
+                parser.error("Problem with raw %d." % (i+1))
+        # Convert coordinates:
+        try:
+            if options.sexag:
+                ras = ac.hms2decimal(l1,':')
+                decs = ac.dms2decimal(l2,':')
+            elif options.dec:
+                ras = float(l1)
+                decs = float(l2)
+            else:
+                ras = float(l1)
+                decs = float(l2)
+        except ValueError:
+            parser.error("Problems with coordinates in raw %d." % (i+1))
+        #
+        if options.sexag or options.dec:
+            #c = w1.wcs2pix(ras,decs)
+            c = w1.wcs_world2pix(ras,decs,0)
+            msg = "  %.3f %.3f" % (c[0],c[1])
+            lot = lot + ddt1[i].strip() + msg + os.linesep
+        else:
+            #c = w1.pix2wcs(ras,decs)
+            c = w1.wcs_pix2world(ras,decs,0)
+            msg = "  %.6f %.6f" % (c[0],c[1])
+            lot = lot + ddt1[i].strip() + msg + os.linesep
+    # Write output
+    froot,fext = os.path.splitext(options.table)
+    if options.sexag or options.dec:
+        nflist = froot+SRPConstants.SRPWCSFilePix+fext
+    else:
+        nflist = froot+SRPConstants.SRPWCSFileCoo+fext
+    if options.verbose:
+        print("Output %s creation." % (nflist))
+    o1 = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,nflist,SRPFiles.WriteMode)
+    o1.SRPOpenFile()
+    o1.SRPWriteFile(lot)
+    o1.SRPCloseFile()
+    if options.verbose:
+        print("End of job.")
+else:
+    parser.print_help()

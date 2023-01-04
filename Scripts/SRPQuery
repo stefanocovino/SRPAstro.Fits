@@ -1,0 +1,250 @@
+#! python
+""" Code to extract objects from a local catalogue
+
+Context : SRP
+Module  : SRPQuery
+Author  : Stefano Covino
+Date    : 07/03/2020
+E-mail  : stefano.covino@brera.inaf.astro.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the extraction of objects from a local catalogue
+
+Usage   : SRPQuery -c arg1 arg2 / -f arg3 -C arg4 [-h] [-m arg5] [-o arg6] -r arg7 [-S] [-v]
+            -c is to input J200 RA and DEC coordinates
+            -C is the acronym of the catalogue to browse
+            -f FITS file to be used for coordinate center
+            -m 
+            -o optional output file
+            -r is the search radius in arcmin. The search is carried out in a cone
+            -S to have an ouput compatible to be shown with the ESO-skycat package
+            -v generates a verbose output
+            For several catalogues you need a working internet connection. Other catalogues
+            are local.
+
+History : (07/10/2003) First version.
+        : (03/02/2005) Optparse.
+        : (02/08/2009) Minor improvement.
+        : (11/08/2010) 2MASS catalogue available.
+        : (21/09/2010) Better import management.
+        : (29/09/2010) New catalogues and code structure.
+        : (01/10/2010) Minor correction.
+        : (05/10/2010) AstroWise catalogue added.
+        : (16/10/2010) Minor output correction.
+        : (24/10/2010) USNO-A2 catalogue.
+        : (14/12/2010) NIR catalogue collection.
+        : (28/03/2011) AGN optical standard stars.
+        : (11/06/2011) USNOB1 catalogue.
+        : (26/08/2011) Reference FITS file.
+        : (26/07/2013) APASS catalogue.
+        : (19/08/2013) Max number of entries in output.
+        : (29/07/2015) Smith et al. ugriz catalogue.
+        : (14/02/2016) SkyBot minor planets.
+        : (17/02/2016) IGAIA.
+        : (04/01/2017) Minor bug porting to python 3.x
+        : (18/05/2017) Minor update.
+        : (14/05/2019) SDSS.
+        : (07/03/2020) Updated WCS tools.
+"""
+
+
+
+import os, os.path, time, sys
+from optparse import OptionParser
+from astropy.io.fits import getval
+from SRP.SRPMath.AstroCoordInput import AstroCoordInput
+from SRPFITS.Fits.GetWCS import GetWCS
+from SRPFITS.Fits.IsFits import IsFits
+from SRPFITS.Frames.getCenterRADEC import getCenterRADEC
+from SRP.SRPCatalogue.BrightStarsClass import BrightStars
+from SRP.SRPCatalogue.StetsonJohnsonStandardStarsClass import StetsonOpticalStandardStars
+from SRP.SRPCatalogue.AstroWiseStandardStarsClass import AstroWiseStandardStars
+from SRP.SRPCatalogue.TWOMASSClass import TWOMASS
+from SRP.SRPCatalogue.USNOClass import USNO
+from SRP.SRPCatalogue.USNOB1Class import USNOB1
+from SRP.SRPCatalogue.SDSSClass import SDSS
+from SRP.SRPCatalogue.NIRStandardStarsClass import NIRStandardStars
+from SRP.SRPCatalogue.AGNOptRefStarsClass import AGNOptRefStars
+from SRP.SRPCatalogue.APASSClass import APASS
+from SRP.SRPCatalogue.SkyBotClass import SkyBot
+from SRP.SRPCatalogue.IGAIAClass import IGAIA
+from SRP.SRPCatalogue.SimbadClass import SIMBAD
+from SRP.SRPCatalogue.SDSSClass import SDSS
+from SRP.SRPCatalogue.SmithetalStandardStarsClass import SmithetalStandardStars
+from SRP.SRPCatalogue import CatalogueConstants
+import SRP.TimeAstro_algs as TimeAstro_algs
+
+
+
+JD2MJD = 2400000.5
+
+
+parser = OptionParser(usage="usage: %prog -c arg1 arg2 / -f arg3 -C arg4 [-h] [-o arg5] -r arg6 [-S] [-t arg7] [-v]", version="%prog 2.11.0")
+parser.add_option("-c", "--coord", action="store", nargs=2, type="string", dest="coord", help="Coordinates RA DEC (J2000)")
+parser.add_option("-C", "--catalog", action="store", nargs=1, type="string", dest="catalog", help="Catalog to browse")
+parser.add_option("-f", "--fitsfile", action="store", nargs=1, type="string", dest="fitsfile", help="Reference FITS file")
+parser.add_option("-m", "--max", action="store", nargs=1, type="int", dest="max", default=1000, help="Maximum number of entries in output")
+parser.add_option("-o", "--out", action="store", nargs=1, type="string", dest="outf", help="Output file")
+parser.add_option("-r", "--radius", action="store", nargs=1, type="float", dest="radius", help="Search radius (arcmin)")
+parser.add_option("-t", "--timehed", action="store", nargs=1, default='MJDSTART', type="string", help="MJD header in FITS file")
+parser.add_option("-S", "--skycat", action="store_true", dest="skycat", help="Skycat output")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+
+
+if (options.coord or options.fitsfile) and options.catalog and options.radius:
+    # now
+    prestime = time.localtime()
+    ltime = float(prestime[0]),float(prestime[1]),float(prestime[2]),float(prestime[3]),float(prestime[4]),float(prestime[5])
+    jd = TimeAstro_algs.to_julian(ltime)
+    # Catalogue
+    if not options.catalog in list(CatalogueConstants.SRPCatalDict.keys()):
+        print("Available catalogues:")
+        catlist = list(CatalogueConstants.SRPCatalDict.keys())
+        catlist.sort()
+        for i in catlist:
+            print("Code %s for %s" % (i, CatalogueConstants.SRPCatalDict[i]))
+        parser.error("Catalogue requested not available.")
+    else:
+        if options.verbose:
+            print("Catalogue requested is: %s" % CatalogueConstants.SRPCatalDict[options.catalog])
+    # Search radius
+    if options.radius <= 0.0:
+        parser.error("Radius %.2f arcmin not acceptable." % options.radius)
+    else:
+        if options.verbose:
+            print("Search radius %.2f arcmin" % options.radius)
+    # Maximum number of entries
+    if options.max <= 0:
+        parser.error("Number of entries in output must be positive.")
+    if options.verbose:
+        print("Up to %d entries retrieved." % options.max)
+    # FITS or coordinates
+    if options.coord and options.fitsfile:
+        parser.error("You cannot indicate coordinates and a reference FITS file frame.")
+    #
+    if options.coord:
+        # Center coordinates
+        inpcoord = AstroCoordInput(options.coord[0],options.coord[1])
+        #
+        if inpcoord.Valid == False:
+            parser.error("Coordinates not corrected.")
+        else:
+            if options.verbose:
+                print("Center coordinates: "+str(inpcoord))
+    elif options.fitsfile:
+        # FITS file
+        if IsFits(options.fitsfile):
+            if options.verbose:
+                print("Reference FITS file is: %s" % options.fitsfile)
+            #
+            crd = getCenterRADEC(options.fitsfile)
+            inpcoord = AstroCoordInput(crd[0],crd[1])
+            #rad = cwcs.getHalfSizeDeg()*60.
+            #
+            if inpcoord.Valid == False:
+                parser.error("FITS file coordinates not corrected.")
+            else:
+                if options.verbose:
+                    print("Center coordinates: "+str(inpcoord))
+            # get time
+            if CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SKB:
+                try:
+                    mjd = getval(options.fitsfile,options.timehed)
+                    jd = mjd + JD2MJD
+                    if options.verbose:
+                        print("Frame JD: %.5f" % jd)
+                except KeyError:
+                    if options.verbose:
+                        print ("Frame JD not readable. Present time used.")
+            #
+        else:
+            parser.error("FITS file cannot be read.")
+    # Output file
+        if options.outf:
+            if options.verbose:
+                print("Output file name is: %s" % options.outf)
+    #
+    # Bright Star Catalogue
+    if CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.BSC:
+        dt = BrightStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # Stetson Standard Stars
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SSC:
+        dt = StetsonOpticalStandardStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # 2MASS Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.TMC:
+        dt = TWOMASS(inpcoord.RA,inpcoord.DEC,options.radius)
+    # AstroWiseCatalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.AWC:
+        dt = AstroWiseStandardStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # USNO-B1 Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.USB:
+        dt = USNOB1(inpcoord.RA,inpcoord.DEC,options.radius)
+    # USNO-A2 Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.USC:
+        dt = USNO(inpcoord.RA,inpcoord.DEC,options.radius)
+    # NIR Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.NCC:
+        dt = NIRStandardStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # AGN Opt Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.AGNOPT:
+        dt = AGNOptRefStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # SDSS Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SDSS:
+        dt = SDSS(inpcoord.RA,inpcoord.DEC,options.radius)
+    # APASS Catalogue
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.APS:
+        dt = APASS(inpcoord.RA,inpcoord.DEC,options.radius)
+    # Smith et al. Standard Stars
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SMI:
+        dt = SmithetalStandardStars(inpcoord.RA,inpcoord.DEC,options.radius)
+    # SkyBot minor planets
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SKB:
+        dt = SkyBot(inpcoord.RA,inpcoord.DEC,options.radius*60,jd,0)
+    # IGAIA
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.IGAIA:
+        dt = IGAIA(inpcoord.RA,inpcoord.DEC,options.radius)
+    # Simbad
+    elif CatalogueConstants.SRPCatalDict[options.catalog] == CatalogueConstants.SMBD:
+        dt = SIMBAD(inpcoord.RA,inpcoord.DEC,options.radius)
+
+    #
+    nobj = dt.GetData()
+    if nobj == None:
+        if options.verbose:
+            print("Catalogue not accessible.")
+        sys.exit(1)
+    #
+    dt.sort()
+    #
+    if nobj > options.max:
+        nobj = options.max
+        dt.ListEntries = dt.ListEntries[0:options.max]
+    #
+    if options.outf:
+        o = open(options.outf,'w')
+        if options.skycat:
+            o.write(dt.Skycat(options.outf))
+        else:
+            o.write(str(dt))
+        o.close()
+    else:
+        if options.skycat:
+            print(dt.Skycat(options.outf))
+        else:
+            print(dt)
+    #
+    if options.verbose:
+        if nobj >= 1:
+            print("%d objects retrieved." % nobj)
+        else:
+            print("No objects retrieved.")
+    else:
+        if options.outf:
+            print(nobj, options.outf)
+        else:
+            print(nobj)
+    #
+else:
+    parser.print_help()

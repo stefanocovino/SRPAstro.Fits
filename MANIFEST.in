@@ -1,0 +1,14 @@
+# Include the README
+include ./README.md
+
+# Include the license file
+include ./LICENSE.txt
+
+# Include the data files
+recursive-include SRPFITS/Data/. *
+
+# Include all python files
+recursive-include . *.py
+
+# Exclude MacOS files
+recursive-exclude . .DS_Store

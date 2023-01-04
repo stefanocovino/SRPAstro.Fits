@@ -1,0 +1,113 @@
+#! python
+""" Code to convert FITS spectra to ASCII.
+
+Context : SRP
+Module  : SRPFitsSpectrum2ASCII.py
+Version : 1.0.2
+Author  : Stefano Covino
+Date    : 02/12/2022
+E-mail  : stefano.covino@inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPFitsSpectrum2ASCII -f arg1 [-h] [-v]
+            -f Input FITS file list or single FITS file
+            Convert a FITS spectrum to an ASCII file
+
+History : (22/09/2011) First version.
+        : (18/05/2017) Minor update.
+        : (02/12/2022) Bug correction in scidata.
+"""
+
+
+
+import os
+from optparse import OptionParser
+import atpy
+from astropy.io import fits
+import SRP.SRPConstants as SRPConstants
+from SRPFITS.Fits.IsFits import IsFits
+
+
+
+parser = OptionParser(usage="usage: %prog -f arg1 [-h] [-v]", version="%prog 1.0.1")
+parser.add_option("-f", "--inputlist", action="store", nargs=1, type="string", help="Input FITS file list or single FITS file")
+parser.add_option("-v", "--verbose", action="store_true", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.inputlist:
+    # Input files
+    if os.path.isfile(options.inputlist):
+        # FITS file
+        if IsFits(options.inputlist):
+            if options.verbose:
+                print("Input FITS file is: %s" % options.inputlist)
+            FITSfileflag = True
+        # FITS file list
+        else:
+            try:
+                f = open(options.inputlist)
+            except IOError:
+                parser.error("FITS file list not readable.")
+            #
+            if options.verbose:
+                print("Input FITS file list is: %s" % options.inputlist)
+            FITSfileflag = False
+        #                        
+        flist = []
+        nentr = 0
+        while True:
+            if FITSfileflag:
+                flist.append(options.inputlist)
+                nentr = 1
+                break
+            else:
+                try:
+                    dt = f.readline()
+                except IOError:
+                    parser.error("FITS file list not readable.")
+                if dt != '':
+                    flist.append(dt.split()[0])
+                    nentr = nentr + 1
+                    if not IsFits(flist[nentr-1]):
+                        parser.error("Input FITS file %s not found" % flist[nentr-1])
+                    if options.verbose:
+                        print("FITS file selected: %s" % flist[nentr-1])    
+                else:
+                    break
+        if not FITSfileflag:
+            f.close()
+        #
+        # Begin analysis
+        for fr in flist:
+            if options.verbose:
+                print("Analyzing file %s" % fr)
+            frhdu = fits.open(fr)
+            prihdr = frhdu[0].header
+            scidata = frhdu[0].data
+            refpix = prihdr['CRPIX1']
+            reflmb = prihdr['CRVAL1']
+            refdl = prihdr['CDELT1']
+            frhdu.close()
+            #
+            # Extract spectrum
+            lamb = []
+            specl = []
+            for i in range(len(scidata)):
+                lmb = ((i-refpix)*refdl + reflmb)
+                lamb.append(lmb)
+                specl.append(scidata[i])
+            #
+            root,ext = os.path.splitext(fr)
+            newfile = root+SRPConstants.SRPASCIISpec
+            if options.verbose:
+                print("Generating file %s" % newfile)
+            #
+            t = atpy.Table()
+            t.add_column('Wave',lamb)
+            t.add_column('Flux',specl)
+            t.write(newfile,type='ascii',overwrite='yes')
+    else:
+        parser.error("Input file or file list does not exist.")
+else:
+    parser.print_help()

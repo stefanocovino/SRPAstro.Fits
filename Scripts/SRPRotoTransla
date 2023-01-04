@@ -1,0 +1,176 @@
+#! python
+""" Code to rototranslate science frame files
+    
+    Context : SRP
+    Module  : SRPRotoTransla.py
+    Version : 1.1.6
+    Author  : Stefano Covino
+    Date    : 07/09/2021
+    E-mail  : stefano.covino@brera.inaf.it
+    URL:    : http://www.merate.mi.astro.it/utenti/covino
+    Purpose : Rototraslastion parameters for FITS images.
+    
+    Usage   : SRPRotoTransla [-v] [-h] [-f] -i arg1 -p arg2 arg3 arg4 -r arg5
+    
+    -f Filter for FWHM value
+    -i Input FITS file
+    -p Rototraslation parameters (x0,y0,ang [deg])
+    -r Reference FITS file
+    
+    
+    History : (27/10/2008) First version.
+    : (27/11/2008) Logical improvement.
+    : (11/09/2009) pyfits transition.
+    : (06/08/2011) Better cosmetics.
+    : (08/08/2011) Minor bug correction.
+    : (20/05/2012) Better import style.
+    : (03/07/2018) Python3 porting.
+    : (07/09/2021) Porting to SRPSTATS.
+    """
+
+
+
+import os, os.path, string, sys, math
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from SRPSTATS.AverIterSigmaClipp import AverIterSigmaClipp
+from astropy.io import fits
+from SRP.SRPSystem.Which import Which
+
+
+
+parser = OptionParser(usage="usage: %prog [-v] [-h] [-f] -i arg1 -p arg2 arg3 arg4 -r arg5", version="%prog 1.1.3")
+parser.add_option("-f", "--fwhmfilter", action="store_true", dest="fwhmf", help="Filter for FWHM value")	
+parser.add_option("-i", "--inputfits", action="store", nargs=1, type="string", dest="fitsfile", help="Input FITS file")
+parser.add_option("-p", "--pars", action="store", dest="pars", nargs=3, type="float", help="Rototraslation parameters (x0,y0,ang [deg])")
+parser.add_option("-r", "--reffits", action="store", nargs=1, type="string", dest="fitsref", help="Reference FITS file")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")	
+(options, args) = parser.parse_args()
+
+
+if options.fitsfile and options.fitsref and options.pars:
+    if os.path.isfile(options.fitsfile):
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfile)
+        else:
+            parser.error("Input FITS file %s not found" % options.fitsfile)
+        if os.path.isfile(options.fitsref):
+            if options.verbose:
+                print("Reference FITS file is: %s." % options.fitsref)
+        else:
+            parser.error("Reference FITS file %s not found" % options.fitsref)
+    if Which(SRPConstants.SRPpeak) == None:
+        parser.error("%s package not found." % SRPConstants.SRPpeak)
+    #
+    starlist = []
+    flist = [options.fitsref,options.fitsfile]
+    if options.verbose:
+        print("Data extraction...")
+    for i in range(len(flist)):
+        stlist = []
+        cmd = SRPConstants.SRPpeak+" -f '5 10 15' -F -P '5 10 15' -m clip -k 2 "+flist[i]
+        res = SRPFiles.SRPPipe(cmd)
+        if res == None:
+            print("FITS file %s can not be processed." % flist[i])
+            sys.exit(SRPConstants.SRPExitFailure)
+        for l in res.split(os.linesep):
+            if len(l) > 2:
+                try:
+                    stlist.append(SRPUtil.PeakData(l.split()))
+                except ValueError:
+                    pass
+                hhfits = fits.open(flist[i])
+                hh = hhfits[0].header
+                irange = SRPUtil.getRange(hh)
+                grange = SRPUtil.getGoodRange(irange,1.0)
+                if i == 0:      # ref frame
+                    gxmin = grange[0]
+                    gxmax = grange[1]
+                    gymin = grange[2]
+                    gymax = grange[3]
+                halfsizeX, halfsizeY = irange[1]/2, irange[3]/2
+                del hh
+                hhfits.close()
+                stlistgood = []
+                # remove objects close to the edges
+                for l in stlist:
+                    if grange[0] < l.X < grange[1] and grange[2] < l.Y < grange[3]:
+                        stlistgood.append(l)
+                    # compute FWHM
+                sgclist = []
+                for l in stlistgood:
+                    if l.FWHM > 0.0:
+                        sgclist.append(l.FWHM)
+                    fwhm = AverIterSigmaClipp(sgclist)[0]
+                    if fwhm == None:
+                        fwhm = 5.0
+                        cmd = SRPConstants.SRPpeak+" -f '%.1f %.1f %.1f' -F -P '%.1f %.1f %.1f' -m clip -k 2  %s" % (fwhm, 2*fwhm, 3*fwhm, fwhm, 2*fwhm, 3*fwhm, flist[i])
+                        res = SRPFiles.SRPPipe(cmd)
+                        if res == None:
+                            print("FITS file %s can not be processed." % flist[i])
+                            sys.exit(SRPConstants.SRPExitFailure)
+        stlist = []
+        for l in res.split(os.linesep):
+            if len(l) > 2:
+                try:
+                    stlist.append(SRPUtil.PeakData(l.split()))
+                except ValueError:
+                    pass
+            stlistgood = []
+            # remove objects close to the edges
+            for l in stlist:
+                if options.fwhmf:
+                    if grange[0] < l.X < grange[1] and grange[2] < l.Y < grange[3] and fwhm*0.75 < l.FWHM < fwhm*1.25:
+                        stlistgood.append(l)
+                    else:
+                        if grange[0] < l.X < grange[1] and grange[2] < l.Y < grange[3]:
+                            stlistgood.append(l)
+                starlist.append((stlistgood,fwhm,flist[i],(halfsizeX,halfsizeY)))
+                if options.verbose:
+                    print("FWHM of frame %s: %.2f" % (starlist[-1][2], starlist[-1][1]))
+                if options.verbose:
+                    print("Half size (X,Y) of reference frame: %.1f %.1f" % (halfsizeX, halfsizeY))
+                if options.verbose:
+                    print("Roto-traslation...")
+#
+        root,ext = os.path.splitext(flist[0])
+        f = file(root+'.pos','w')
+        f.write("serv_type: catalog"+os.linesep)
+        f.write("long_name: SRP catalog for file %s" % root+'.pos'+os.linesep)
+        f.write("short_name: %s" % root+'.pos'+os.linesep)
+        f.write("url: ./%s" % root+'.pos'+os.linesep)
+        f.write("id_col: 0"+os.linesep)
+        f.write("x_col: 13"+os.linesep)
+        f.write("y_col: 14"+os.linesep)
+        f.write("symbol: {} circle 4"+os.linesep)
+        f.write("Id\tX\tY\tNpix\tMean\tDev\tMed\tMin\tMax\tFWHMX\tFWHMY\tFWHM\tFlux\tNX\tNY"+os.linesep)
+        f.write("---------"+os.linesep)
+        listmag = starlist[0][0]
+        for i in listmag:
+            i.NX,i.NY = SRPUtil.rotoTrasla((i.X,i.Y),0.0,0.0,0.0,starlist[0][3][0],starlist[0][3][1])
+            f.write(str(i))
+        f.write("EOD"+os.linesep)
+        f.close()
+        root,ext = os.path.splitext(flist[1])
+        f = file(root+'.pos','w')
+        f.write("serv_type: catalog"+os.linesep)
+        f.write("long_name: SRP catalog for file %s" % root+'.pos'+os.linesep)
+        f.write("short_name: %s" % root+'.pos'+os.linesep)
+        f.write("url: ./%s" % root+'.pos'+os.linesep)
+        f.write("id_col: 0"+os.linesep)
+        f.write("x_col: 13"+os.linesep)
+        f.write("y_col: 14"+os.linesep)
+        f.write("symbol: {} circle 4"+os.linesep)
+        f.write("Id\tX\tY\tNpix\tMean\tDev\tMed\tMin\tMax\tFWHMX\tFWHMY\tFWHM\tFlux\tNX\tNY"+os.linesep)
+        f.write("---------"+os.linesep)
+        listmag = starlist[1][0]
+        for i in listmag:
+            i.NX,i.NY = SRPUtil.rotoTrasla((i.X,i.Y),options.pars[0],options.pars[1],options.pars[2],starlist[1][3][0],starlist[1][3][1])
+            f.write(str(i))
+        f.write("EOD"+os.linesep)
+        f.close()
+else:
+    parser.print_help()
+

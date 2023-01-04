@@ -1,0 +1,238 @@
+#! python
+""" Code to extract sources from a fits frame
+
+Context : SRP
+Module  : SRPAstrometry
+Author  : Stefano Covino
+Date    : 17/03/2021
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : 
+
+Usage   :
+ 
+
+History : (27/09/2010) First version.
+        : (03/10/2010) Number of stars for astrometry saved.
+        :               RA and DEC shift reported.
+        : (13/10/2010) More stars for astrometry.
+        : (24/10/2010) USNO-A2 catalogue can also be used.
+        : (07/08/2011) Better cosmetics.
+        : (26/08/2011) More verbose output.
+        : (27/03/2012) Minor bug correction and possibility to choose number of analyzed objects.
+        : (13/08/2013) RA shift corrected for cos(declination).
+        : (29/08/2013) More debug information.
+        : (02/09/2013) Possibility to change triangle match tolerance.
+        : (09/01/2014) Possibility to change max residual rms for an acceptable solution.
+        : (30/10/2014) Sextractor source finding.
+        : (31/07/2015) python3 porting.
+        : (16/05/2017) Minor update.
+        : (18/05/2017) Minor update.
+        : (09/02/2021) Daophot source finding.
+        : (17/03/2021) Astro-align algorithm implemented.
+"""
+
+
+from SRP.SRPMath.AstroAngleInput import AstroAngleInput
+from SRP.SRPMath.AstroCoordInput import AstroCoordInput
+from SRPFITS.Frames.AstrometryClass import Astrometry
+from SRPFITS.Fits.IsFits import IsFits
+from optparse import OptionParser
+import math, os, warnings
+
+
+parser = OptionParser(usage="usage: %prog [-A] [-d] -i arg1 [-c arg2 arg3] [-e] [-h] [-m arg4] [-N] [-n arg5 arg6] -o arg7 [-O] [-p arg8 arg9] [-P arg10 arg11] [-r arg12] [-s] [-t arg12 arg13] [-v]  [-x arg14 arg15]", version="%prog 2.0.0")
+parser.add_option("-c", "--center", action="store", type="float", nargs=2, dest="center", help="Reference for equatorial coordinates")
+parser.add_option("-D", "--debug", action="store_true", dest="debug", help="Show starting parameter values")
+parser.add_option("-d", "--daophot", action="store_true", dest="daophot", help="Daophot source finding")
+parser.add_option("-f", "--framesize", action="store", type="float", nargs=1, dest="framesize", help="Frame size (arcmin)")
+parser.add_option("-i", "--inpfits", action="store", nargs=1, type="string", dest="ifits", help="Input FITS file")
+parser.add_option("-m", "--maxrms", action="store", type="float", nargs=1, dest="maxrms", default=3.0, help="Max rms (arcsec) for an acceptable solution")
+parser.add_option("-n", "--nobjs", action="store", type="int", nargs=2, dest="nobjs", default=(20,20), help="Number of objects to analyze (source catalog)")
+parser.add_option("-N", "--NearInfrared", action="store_true", dest="NearInfrared", help="Use 2MASS catalogue")
+parser.add_option("-o", "--outfits", action="store", nargs=1, type="string", dest="ofits", help="Output FITS file")
+parser.add_option("-O", "--Optical", action="store_true", dest="Optical", help="Use USNO-A2 catalogue")
+parser.add_option("-p", "--pixcenter", action="store", type="float", nargs=2, dest="pixcenter", help="Reference for pixel coordinates")
+parser.add_option("-P", "--point", action="store", type="float", nargs=2, dest="point", help="Pointing coordinates.")
+parser.add_option("-r", "--rot", action="store", type="float", nargs=1, dest="rot", help="Rotation angle (deg)")
+parser.add_option("-s", "--sex", action="store_true", dest="sex", help="Sextractor source finding")
+parser.add_option("-t", "--matchtol", action="store", type="float", nargs=2, dest="matchtol", default=(0.5,5.), help="Tolerance for triangle match (angular and distance)")
+parser.add_option("-x", "--pixincr", action="store", type="float", nargs=2, dest="pixincr", help="Increment per pixel [e.g. -1.0 1.0] (arcsec/pix)")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.ifits and options.ofits:
+    # input file
+    ifits = options.ifits
+    ofits = options.ofits
+    if not IsFits(ifits):
+        parser.error("Input FITS file %s does not exist." % ifits)
+    if options.verbose:
+        print("Input FITS file: %s" % options.ifits)
+    # equatorial center
+    if options.center:
+        icenter = AstroCoordInput(options.center[0],options.center[1])
+        center = (icenter.RA,icenter.DEC)
+        if options.verbose:
+            print("Reference for equatorial system: "+str(icenter)) 
+    else:
+        center = None
+    # pixel center
+    if options.pixcenter:
+        pixcenter = options.pixcenter
+        if options.verbose:
+            print("Pixel reference position: %.2g, %.2g" % pixcenter)
+    else:
+        pixcenter = None
+    # pointing
+    if options.point:
+        ipoint = AstroCoordInput(options.point[0],options.point[1])
+        point = (ipoint.RA,ipoint.DEC)
+        if options.verbose:
+            print("Pointing direction: "+str(ipoint))
+    else:
+        point = None
+    # pixel increment
+    if options.pixincr:
+        pixincr = [i/3600.0 for i in options.pixincr]
+        if options.verbose:
+            print("Increment per pixel %.2g %.2g arcsec/pix" % options.pixincr)
+    else:
+        pixincr = None
+    # rotation
+    if options.rot:
+        rotangle = options.rot
+        if options.verbose:
+            print("Field rotation: %.2g" % rotangle)
+    else:
+        rotangle = None
+    # framesize
+    if options.framesize:
+        framesize = options.framesize/60.0
+        if framesize <= 0:
+            parser.error("Frame size must be positive.")
+        if options.verbose:
+            print("Frame size %.2g arcmin" % options.framesize)
+    else:
+        framesize = None
+    # Number of objects
+    if options.nobjs[0] < 3 or options.nobjs[1] < 3:
+        parser.error("Number of objects must be at least 3.")
+    else:
+        nsrc = options.nobjs[0]
+        ncat = options.nobjs[1]
+    if options.verbose:
+        print("Maximum number of frame sources to extract    : %d" % nsrc)
+        print("Maximum number of catalogue sources to extract: %d" % ncat)
+    # catalogue
+    if options.Optical:
+        catquery = 'O'
+    elif options.NearInfrared:
+        catquery = 'N'
+    else:
+        catquery = 'N'
+        if options.verbose:
+            print("No catalogue selected or both optical/near-infrared selected. NearInfrared catalogue used.")
+    # tolerance
+    if options.matchtol:
+        if options.matchtol[0] <= 0.0 or options.matchtol[1] <= 0.0:
+            parser.error("Tolerances must be posistive.")
+        if options.verbose and options.debug:
+            print("Angular and distance tolerances for triagle match are: %.1f deg and %.1f pixel." % (options.matchtol[0], options.matchtol[1]))
+    # Max residual rms
+    if options.maxrms <= 0.0:
+        parser.error("Max residual rms must be posistive.")
+        if options.verbose:
+            print("Max residual rms (arcsec): %.1f" % options.maxrms)
+    # Source finding
+    daophot = False
+    sex = False
+    if options.daophot and options.sex:
+        parser.error("One only source finding algorithm can be chosen.")
+    elif options.daophot and not options.sex:
+        daophot = True
+    elif not options.daophot and options.sex:
+        sex = True
+    elif not options.daophot and not options.sex:
+        daophot = True
+    #
+    astr = Astrometry(ifits,center,pixcenter,point,pixincr,rotangle,framesize,options.maxrms)
+    #print astr.FitsFrame.Header
+    #print astr.FitsFrame.WCS.header
+    if options.debug:
+        print() 
+        print("Input WCS parameters")
+        print("RA, DEC      : ", astr.RA,astr.DEC)
+        print("CRPIX1,2     : ", astr.CRPIX1, astr.CRPIX2)
+        print("CDELT1,2     : ", astr.CDELT1, astr.CDELT2)
+        print("PC11,12,21,22: ", astr.PC11, astr.PC12, astr.PC21, astr.PC22)
+        print("CRVAL1,2     : ", astr.CRVAL1, astr.CRVAL2)
+        print("CTYPE1,2     : ", astr.CTYPE1, astr.CTYPE2)
+    #
+    if daophot:
+        if options.verbose:
+            print("Daophot frame source finding...")
+        astr.GetDaoSources(maxobjs=nsrc)
+    elif sex:
+        if options.verbose:
+            print("Sextractor frame source finding...")
+        astr.GetSexSources(maxobjs=nsrc)
+    if options.verbose:
+        print("%d sources selected." % len(astr.List))
+    #
+    if catquery == 'O':
+        if options.verbose:
+            print("USNO-A2 catalogue source finding...")
+    else:
+        if options.verbose:
+            print("2MASS catalogue source finding...")
+    astr.GetCatSources(maxentr=ncat,catq=catquery)
+    if options.verbose:
+        print("%d sources selected." % len(astr.CatList))
+    #
+    if options.verbose:
+        print("Finding solution...")
+    astr.FindSolution(options.matchtol[0],options.matchtol[1])
+    #
+    if options.debug:
+        print()
+        print("Saving coordinates to match...")
+        ff = open(os.path.splitext(ofits)[0]+'.lst1','w')
+        for iff in astr.REFCDR:
+            ff.write("%.3f %.3f\n" % (iff[0],iff[1]))
+        ff.close()
+        ff = open(os.path.splitext(ofits)[0]+'.lst2','w')
+        for iff in astr.OBJCDR:
+            ff.write("%.3f %.3f\n" % (iff[0],iff[1]))
+        ff.close()
+        print("Saving catalogue and frame objects...")
+        ff = open(os.path.splitext(ofits)[0]+'.sfrm','w')
+        for iff in astr.List:
+            ff.write(str(iff))
+        ff.close()
+        ff = open(os.path.splitext(ofits)[0]+'.scat','w')
+        for iff in astr.CatList:
+            ff.write(str(iff)+os.linesep)
+        ff.close()
+        print()
+    #
+    if astr.Astrometrized:
+        if options.verbose:
+            print("Astrometic solution found!")
+            print("Average residual: %.2g arcsec for %d stars." % (astr.Residuals, astr.NStarRes)) 
+            print("RA [x cos(DEC)] and DEC shift wrt the pointing coordinates: %.1f %.1f arcsec" % (astr.RAshift*math.cos(math.radians(astr.DEC)), astr.DECshift))
+        else:
+            print("%d %.2g %d %.1f %.1f" % (1,astr.Residuals,astr.NStarRes,astr.RAshift,astr.DECshift))
+    else:            
+        if options.verbose:
+            print("Astrometric solution not found.")
+            print("Average residual: %.2g arcsec for %d stars." % (astr.Residuals, astr.NStarRes)) 
+        else:
+            print("%d %.2g %d" % (0, astr.Residuals, astr.NStarRes))
+    #
+    if options.verbose:
+        print("Saving FITS file %s" % ofits)
+    astr.SaveFile(ofits)
+else:
+    parser.print_help()

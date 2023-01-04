@@ -1,0 +1,199 @@
+#! python
+""" Code to create a science frame file
+
+Context : SRP
+Module  : SRPScienceFrameImaging.py
+Author  : Stefano Covino
+Date    : 19/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the creation of a science frame FITS file.
+
+Usage   : SRPScienceFramesImaging -b arg1 -f arg2 [-h] -i arg3 [-v] 
+            -b Input BIAS FITS file or value
+            -f Input FLAT FITS file or value
+            -i Input science FITS file list
+
+History : (23/05/2003) First version.
+        : (29/05/2003) Better management of headers.
+        : (13/06/2003) Better help messages.
+        : (03/08/2004) Bias or flat constants.
+        : (03/02/2005) Optparse.
+        : (11/09/2009) Minor correction.
+        : (29/10/2010) Pyfits importing and numpy tools.
+        : (31/12/2010) Minor bugs.
+        : (06/08/2011) Better cosmetics.
+        : (04/04/2013) Minor bug correction.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (08/02/2017) Python3 porting.
+        : (16/05/2017) Minor updates.
+        : (18/05/2017) Minor update.
+        : (19/05/2017) Minor update.
+"""
+
+
+
+import os, os.path, sys, warnings
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+from SRPFITS.Fits.IsFits import IsFits
+import numpy
+from astropy.io import fits
+
+
+parser = OptionParser(usage="usage: %prog -b arg1 -f arg2 [-h] -i arg3 [-v]", version="%prog 2.0.6")
+parser.add_option("-b", "--bias", action="store", nargs=1, type="string", dest="inpbiasfile", help="Input BIAS FITS file or constant")
+parser.add_option("-f", "--flat", action="store", nargs=1, type="string", dest="inpflatfile", help="Input FLAT FITS file or constant")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input science FITS file list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist and options.inpbiasfile and options.inpflatfile:
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    if os.path.isfile(options.inpbiasfile):
+        if options.verbose:
+            print("Input BIAS FITS file is: %s." % options.inpbiasfile)
+        if options.verbose:
+            print("Loading BIAS...")
+        bs = fits.open(options.inpbiasfile)
+        bsdata = bs[0].data
+        bshead = bs[0].header
+        bsshape = bs[0].data.shape
+        bs.close()
+    else:
+        if options.verbose:
+            print("Input BIAS level is: %s." % options.inpbiasfile)
+        try:
+            bsdata = float(options.inpbiasfile)
+        except:
+            bsdata = 0.0
+        bsshape = None
+    if os.path.isfile(options.inpflatfile):
+        if options.verbose:
+            print("Input FLAT FITS file is: %s." % options.inpflatfile)
+        if options.verbose:
+            print("Loading FLAT...")
+        fl = fits.open(options.inpflatfile)
+        fldata = fl[0].data
+        flhead = fl[0].header
+        flshape = fl[0].data.shape
+        fl.close()
+    else:
+        if options.verbose:
+            print("Input FLAT level is: %s." % options.inpflatfile)
+        try:
+            fldata = float(options.inpflatfile)
+        except:
+            fldata = 1.0
+        flshape = None
+    if os.path.isfile(options.fitsfilelist) and not IsFits(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        froot,fext = os.path.splitext(options.fitsfilelist)
+        o = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,froot+SRPConstants.SRPScienceFile+fext,SRPFiles.WriteMode)
+        o.SRPOpenFile()
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                file = dt.strip().split()[0]
+                if not os.path.isfile(file):
+                    parser.error("Input FITS file %s not found" % file)
+                if options.verbose:
+                    print("FITS file selected: %s" % file)
+                if options.verbose:
+                    print("Loading frames...")
+                cb = fits.open(file)
+                cbdata = cb[0].data
+                cbhead = cb[0].header
+                cbshape = cb[0].data.shape
+                cb.close()
+                #
+                if bsshape == None:
+                    bsshape = cbshape
+                if flshape == None:
+                    flshape = cbshape
+                if cbshape != bsshape or cbshape != flshape:
+                    print("Only files with the same size can be managed.")
+                    f.SRPCloseFile()
+                    o.SRPCloseFile()
+                    sys.exit(1)
+                if options.verbose:
+                    print("BIAS subtraction...")
+                cbb = cbdata - bsdata
+                if options.verbose:
+                    print("FLAT division...")
+                fll = numpy.where(fldata > 0, fldata, 1.)
+                cbbf = numpy.divide(cbb,fll)
+                root,ext = os.path.splitext(os.path.basename(file))
+                if options.verbose:
+                    print("Saving file: %s" % root+SRPConstants.SRPScienceFITS)
+                nfts = fits.PrimaryHDU(cbbf,cbhead)
+                nftlist = fits.HDUList([nfts])
+                warnings.resetwarnings()
+                warnings.filterwarnings('ignore', category=UserWarning, append=True)
+                if options.verbose:
+                    nftlist.writeto(root+SRPConstants.SRPScienceFITS,overwrite=True,output_verify='warn')
+                else:
+                    nftlist.writeto(root+SRPConstants.SRPScienceFITS,overwrite=True,output_verify='ignore')
+                warnings.resetwarnings() 
+                warnings.filterwarnings('always', category=UserWarning, append=True)   
+                AddHeaderComment(root+SRPConstants.SRPScienceFITS,(("SRPComment: bias and flat-field corrected imaging frame."),))                
+                oentr = root+SRPConstants.SRPScienceFITS+SRPConstants.SRPTab+'.'.join(dt.strip().split()[1:])
+                o.SRPWriteFile(oentr+os.linesep)
+            else:
+                break
+        f.SRPCloseFile()
+        o.SRPCloseFile()
+    elif IsFits(options.fitsfilelist):
+        if options.verbose:
+            print("FITS file selected: %s" % options.fitsfilelist)
+        if options.verbose:
+            print("Loading frame...")
+        cb = fits.open(options.fitsfilelist)
+        cbdata = cb[0].data
+        cbhead = cb[0].header
+        cbshape = cb[0].data.shape
+        cb.close()
+        #
+        if bsshape == None:
+            bsshape = cbshape
+        if flshape == None:
+            flshape = cbshape
+        if cbshape != bsshape or cbshape != flshape:
+            print("Only files with the same size can be managed.")
+            sys.exit(1)
+        if options.verbose:
+            print("BIAS subtraction...")
+        cbb = cbdata - bsdata
+        if options.verbose:
+            print("FLAT division...")
+        fll = numpy.where(fldata > 0, fldata, 1.)
+        cbbf = numpy.divide(cbb,fll)
+        root,ext = os.path.splitext(os.path.basename(options.fitsfilelist))
+        if options.verbose:
+            print("Saving file: %s" % root+SRPConstants.SRPScienceFITS)
+        else:
+            print(root+SRPConstants.SRPScienceFITS)
+        nfts = fits.PrimaryHDU(cbbf,cbhead)
+        nftlist = fits.HDUList([nfts])
+        warnings.resetwarnings()
+        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+        if options.verbose:
+            nftlist.writeto(root+SRPConstants.SRPScienceFITS,overwrite=True,output_verify='warn')
+        else:
+            nftlist.writeto(root+SRPConstants.SRPScienceFITS,overwrite=True,output_verify='ignore')
+        warnings.resetwarnings() 
+        warnings.filterwarnings('always', category=UserWarning, append=True)   
+        AddHeaderComment(root+SRPConstants.SRPScienceFITS,(("SRPComment: bias and flat-field corrected imaging frame."),))                
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

@@ -1,0 +1,135 @@
+#! python
+""" Code to convert GAIA photom output files to Skycat or ascii format.
+
+Context : SRP
+Module  : SRPGAIA2Sky
+Author  : Stefano Covino
+Date    : 30/08/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/~covino
+Purpose : Manage the conversion of GAIA output files to Skycat
+        :       or ascii format.
+
+Usage   : SRPGAIA2Sky [-h] [-v] [-a arg1] [-e arg2] -f arg3 [-S] [-z arg4 arg5]
+            -a Airmass of the analyzed frame
+            -e Exposure time (sec) for frame(s)
+            -f Input GAIA photom file
+            -S ESO-Skycat output
+            -z Zero point and error for photometry
+
+
+History : (21/11/2007) First version.
+        : (11/09/2009) Minor correction.
+        : (29/08/2011) Better cosmetics.
+        : (18/02/2012) Minor correction.
+        : (20/05/2012) Minor correction.
+        : (30/08/2017) astropy table output
+"""
+
+
+
+import os, os.path
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+from SRP.SRPSystem.Which import Which
+import SRP.SRPUtil as SRPUtil
+from astropy.table import Table
+
+
+parser = OptionParser(usage="usage: %prog [-h] [-v] [-a arg1] [-e arg2] -f arg3 [-S] [-z arg4 arg5]", version="%prog 1.1.0")
+parser.add_option("-a", "--airmass", action="store", type="float", dest="airmass", help="Airmass of the analyzed frame", default=0.0)
+parser.add_option("-e", "--exptime", action="store", type="float", dest="exptime", help="Exposure time (sec) for frame(s)")
+parser.add_option("-f", "--file", action="store", nargs=1, type="string", dest="inputfilename", help="Input GAIA photom file")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-S", "--skycat", action="store_true", dest="skycat", help="ESO-Skycat output")
+parser.add_option("-t", "--table", action="store_true", dest="table", help="astropy table output")
+parser.add_option("-z", "--zerpoints", action="store", nargs=2, type="float",dest="zpoints", help="Zero point and error for photometry")
+(options, args) = parser.parse_args()
+
+
+if options.inputfilename:
+    if os.path.isfile(options.inputfilename):
+        if options.verbose:
+            print("Input file name is: %s." % options.inputfilename)
+        if not options.exptime:
+            Exptime = 1.0
+        else:
+            Exptime = options.exptime
+        if options.verbose:
+            print("Exposure time is %.1f" % Exptime)
+        zpl = [0.0,0.0]
+        if options.zpoints:
+            zpl[0] = options.zpoints[0]
+            zpl[1] = options.zpoints[1]
+        if options.verbose:
+            print("Zero point is %.3f +/- %.3f" % (zpl[0], zpl[1]))
+        if options.airmass < 0.0:
+            airmass = 0.0
+        else:
+            airmass = options.airmass
+        if options.verbose:
+            if options.airmass < 0.0:
+                print("Airmass cannot be negative. Assumed zero.")
+        root,ext = os.path.splitext(options.inputfilename)
+        g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, options.inputfilename, SRPFiles.ReadMode)
+        g.SRPOpenFile()
+        dt = g.SRPReadTotFile()
+        g.SRPCloseFile()
+        stlist = []
+        data_row = []
+        for i in range(0,len(dt),2):
+            if len(dt[i]) > 2:
+                dtlu = dt[i].split()
+                dtld = dt[i+1].split()
+                if dtlu[7] == 'OK':
+                    try:
+                        stlist.append(SRPUtil.GAIAStarData(Exptime,dtlu[0],dtlu[1],dtlu[2],dtlu[3],dtlu[4],dtlu[5],dtlu[6],[dtlu[8],dtld[2],dtld[3]],zpl,airmass))
+                    except:
+                        print("Error in input file from line %d to line %d." % (i+1,i+2))
+                    #
+                    data_row.append((dtlu[0],dtlu[1],dtlu[2],dtlu[3],dtlu[4],dtlu[5],dtlu[6],dtlu[8],dtld[2],dtld[3],airmass))
+        if options.verbose:
+            print("Photometry performed for %d objects." % len(stlist))
+        if options.skycat:
+            g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPGAIAPhotSky, SRPFiles.WriteMode)
+        else:
+            g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPGAIAPhot, SRPFiles.WriteMode)
+        g.SRPOpenFile()
+        if options.skycat:
+            g.SRPWriteFile("serv_type: catalog"+os.linesep)
+            g.SRPWriteFile("long_name: SRP catalog for file %s" % options.inputfilename+os.linesep)
+            g.SRPWriteFile("short_name: %s" % root+SRPConstants.SRPGAIAPhotSky+os.linesep)
+            g.SRPWriteFile("url: ./%s" % root+SRPConstants.SRPGAIAPhotSky+os.linesep)
+            g.SRPWriteFile("id_col: 0"+os.linesep)
+            g.SRPWriteFile("x_col: 1"+os.linesep)
+            g.SRPWriteFile("y_col: 2"+os.linesep)
+            g.SRPWriteFile("symbol: {} circle 4"+os.linesep)
+            g.SRPWriteFile("Id\tX\tY\tMag\teMag\tSky\tTotSignal")
+            g.SRPWriteFile("\tRadius1\tRadius2\tRadius3\tAirmass"+os.linesep)
+            g.SRPWriteFile("---------"+os.linesep)
+        count = 0
+        for l in stlist:
+            g.SRPWriteFile(str(l)+os.linesep)
+            count = count + 1
+        if options.skycat:
+            g.SRPWriteFile("EOD"+os.linesep)
+        g.SRPCloseFile()
+        #
+        if options.table:
+            t = Table(rows=data_row,names=('Id','X','Y','Mag','eMag','Sky','Flux','r_1','r_2','r_3','Airmass'))
+            t.write(root+'.tab',format='ascii.ecsv',overwrite=True)
+        #
+        if options.verbose:
+            print("%d objects selected." % count)
+        if options.verbose:
+            if options.skycat:
+                print("Results reported in file %s" % root+SRPConstants.SRPGAIAPhotSky)
+            elif options.table:
+                print("Results reported in file %s" % root+'.tab')
+            else:
+                print("Results reported in file %s" % root+SRPConstants.SRPGAIAPhot)
+    else:
+        parser.error("%s not found." % options.inputfilename)
+else:
+    parser.print_help()

@@ -1,0 +1,182 @@
+#! python
+""" Code to derive instrumental Stokes parameters
+    
+Context : SRP
+Module  : SRPSpectralExtraction
+Author  : Stefano Covino
+Date    : 26/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Extract spectra from 2D frames
+
+usage   : SRPSpectralExtraction [-h] [-c clip value] [-e ext] -i file
+            [-l pixel pixel] [-m] -s pixel pixel [-v]
+            [--version] [-u pixel pixel]
+
+            -a Automatic spectrum location
+            -c clip value and sky computed by sigma clipping
+            -e FITS extension (default 0)
+            -i Input FITS 2D spectral frame
+            -l Lower sky window (pixel)
+            -m Sky computed by median operator
+            -s Spectrum window (pixel)
+            -u Upper sky window (pixel)
+    
+History : (28/03/2013) First version.
+        : (03/04/2013) Automatic spectrum location.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (18/05/2017) Minor update.
+        : (26/05/2017) Minor update.
+"""
+
+__version__ = '1.1.3'
+
+
+import argparse, os, warnings
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+from SRPFITS.Fits.GetData import GetData
+from SRPFITS.Fits.GetHeader import GetHeader
+from SRPFITS.Fits.IsFits import IsFits
+from SRPFITS.Fits.GetSpectrumPosition import GetSpectrumPosition
+from SRP.SRPStatistics.AverIterSigmaClipp import AverIterSigmaClipp
+import numpy
+from astropy.io import fits
+
+
+skyext = '_sky'
+skysub = '_skysub'
+obj    = '_obj'
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-a", "--auto", action="store_true", help="Automatic spectrum location")
+parser.add_argument("-c", "--sigmaclip", action="store", type=float, help="Sky computed by sigma clipping", metavar='clip value')
+parser.add_argument("-e", "--extension", action="store", type=int, default=0, help="FITS extension", metavar='ext')
+parser.add_argument("-i", "--inputfitsfile", action="store", help="Input FITS 2D spectral frame", required=True, metavar='file')
+parser.add_argument("-l", "--lowsky", action="store", type=int, nargs=2, default=(0,0), help="Lower sky window (pixel)", metavar='pixel')
+parser.add_argument("-m", "--median", action="store_true", help="Sky computed by median operator")
+parser.add_argument("-s", "--spectrum", action="store", type=int, nargs=2, help="Spectrum window (pixel)", required=True, metavar='pixel')
+parser.add_argument("-v", "--verbose", action="store_true", help="Fully describe operations")
+parser.add_argument("--version", action="version", version=__version__)
+parser.add_argument("-u", "--upsky", action="store", type=int, nargs=2, default=(0,0), help="Upper sky window (pixel)", metavar='pixel')
+options = parser.parse_args()
+
+
+#
+if not IsFits(options.inputfitsfile):
+    parser.error("Invalid input FITS file.")
+if options.verbose:
+    print("Input FITS 2D spectral frame: {}".format(options.inputfitsfile))
+#
+if options.extension < 0:
+    parser.error("Invalid FITS extension.")
+if options.verbose:
+    print("FITS file extension {}".format(options.extension))
+#
+hea = GetHeader(options.inputfitsfile)[0]
+dat = GetData(options.inputfitsfile,options.extension)[0]
+if hea == None or dat == None:
+    parser.error("FITS 2D frame not readable.")
+#
+lls = numpy.array(options.lowsky).min()
+uls = numpy.array(options.lowsky).max()
+if lls <= 0 or uls <= 0 or lls > dat.shape[0] or uls > dat.shape[0]:
+    parser.error("Invalid low sky window.")
+if options.verbose:
+    print("Low sky window: {} {}".format(lls, uls))
+lls = lls - 1
+#
+lus = numpy.array(options.upsky).min()
+uus = numpy.array(options.upsky).max()
+if lus <= 0 or uus <= 0 or lus > dat.shape[0] or uus > dat.shape[0]:
+    parser.error("Invalid upper sky window.")
+if options.verbose:
+    print("Upper sky window: {} {}".format(lus, uus))
+lus = lus - 1
+#
+lsp = numpy.array(options.spectrum).min()
+usp = numpy.array(options.spectrum).max()
+if lsp <= 0 or usp <= 0 or lsp > dat.shape[0] or usp > dat.shape[0]:
+    parser.error("Invalid spectrum window.")
+if options.verbose:
+    print("Spectrum window: {} {}".format(lsp, usp))
+lsp = lsp - 1
+#
+if not options.median and options.sigmaclip <= 0:
+    parser.error("Median not enabled or invalid sigma-clipping value.")
+if options.median and options.sigmaclip > 0:
+    parser.error("Median and sigma-clipping options cannot be enabled together.")
+if options.verbose and options.sigmaclip and not options.median:
+    print("Sigma-clipping value {}".format(options.sigmaclip))
+#
+x = numpy.append(numpy.arange(lls, uls), numpy.arange(lus, uus))
+#
+bkg = numpy.zeros_like(dat)
+if options.median:
+    if options.verbose:
+        print("Sky computed by median operator")
+    if x != []:
+        bckmedian = numpy.median(dat[x,:],axis=0)
+        bkg = bkg+bckmedian
+elif options.sigmaclip:
+    if options.sigmaclip:
+        print("Sky computed by sigma-clipping")
+    for col in numpy.arange(dat.shape[1]):
+        asc = AverIterSigmaClipp(list(dat[x, col]), options.sigmaclip)[0]
+        bkg[:, col] = asc
+#
+dat_bkg = dat - bkg
+if options.auto:
+    swin = len(list(range(lsp,usp)))/2.
+    sloc = GetSpectrumPosition(dat_bkg[lsp:usp,:])
+    nlsp = int(round(lsp+sloc-swin))
+    nusp = int(round(lsp+sloc+swin))
+    if options.verbose:
+        print("Computed spectrum window: {} {}".format(nlsp+1, nusp))
+else:
+    nlsp = lsp
+    nusp = usp
+spec = dat_bkg[nlsp:nusp,:].sum(axis=0)
+#
+froot,fext = os.path.splitext(options.inputfitsfile)
+#
+warnings.resetwarnings()
+warnings.filterwarnings('ignore', category=UserWarning, append=True)
+if options.verbose:
+    fits.writeto(froot+skyext+fext,bkg,hea,overwrite=True,output_verify='warn')
+else:
+    fits.writeto(froot+skyext+fext,bkg,hea,overwrite=True,output_verify='ignore')
+warnings.resetwarnings()
+warnings.filterwarnings('always', category=UserWarning, append=True)
+AddHeaderComment(froot+skyext+fext,(("SRPComment: sky frame for %s." % options.inputfitsfile),
+                                    ("SRPComment: sky evaluated in %d,%d and %d,%d." % (lls+1,uls,lus+1,uus))))
+if options.verbose:
+    print("Output file {} created".format(froot+skyext+fext))
+#
+warnings.resetwarnings()
+warnings.filterwarnings('ignore', category=UserWarning, append=True)
+if options.verbose:
+    fits.writeto(froot+skyext+fext,dat_bkg,hea,overwrite=True,output_verify='warn')
+else:
+    fits.writeto(froot+skyext+fext,dat_bkg,hea,overwrite=True,output_verify='ignore')
+warnings.resetwarnings()
+warnings.filterwarnings('always', category=UserWarning, append=True)
+AddHeaderComment(froot+skysub+fext,(("SRPComment: nosky frame for %s." % options.inputfitsfile),
+                                    ("SRPComment: sky evaluated in %d,%d and %d,%d." % (lls+1,uls,lus+1,uus))))
+if options.verbose:
+    print("Output file {} created".format(froot+skysub+fext))
+#
+warnings.resetwarnings()
+warnings.filterwarnings('ignore', category=UserWarning, append=True)
+if options.verbose:
+    fits.writeto(froot+obj+fext,spec,hea,overwrite=True,output_verify='warn')
+else:
+    fits.writeto(froot+obj+fext,spec,hea,overwrite=True,output_verify='ignore')
+warnings.resetwarnings()
+warnings.filterwarnings('always', category=UserWarning, append=True)
+AddHeaderComment(froot+obj+fext,(("SRPComment: extracted spectrum from %s." % options.inputfitsfile),
+                                 ("SRPComment: sky evaluated in %d,%d and %d,%d." % (lls+1,uls,lus+1,uus)),
+                                  ("SRPComment: spectrum extracted in %d,%d." % (nlsp+1,nusp))))
+if options.verbose:
+    print("Output file {} created".format(froot+obj+fext))
+#

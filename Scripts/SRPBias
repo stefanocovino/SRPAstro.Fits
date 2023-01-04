@@ -1,0 +1,140 @@
+#! python
+""" Code to create a bias file
+
+Context : SRP
+Module  : SRPBias.py
+Status  : approved
+Author  : Stefano Covino
+Date    : 16/11/2021
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the creation of BIAS FITS file.
+
+Usage   : SRPBias [-h] -i arg1 [-m] -o arg2 [-s arg3] [-v]
+            -i is the ascii file containing the list of FITS files to be processed.
+            -m median rather then sigma-clipped average
+            -o is the name for the output BIAS file.
+            -s sigma level (default 5)
+            The output BIAS file is obtained by a 5sigma-clipped average of the input files.
+
+History : (23/05/2003) First version.
+        : (29/05/2003) Better statistics computation and
+            header management.
+        : (03/02/2005) Optparse.
+        : (11/09/2009) Minor correction.
+        : (20/10/2009) pyfits conversion
+        : (29/10/2010) Sigma-clipped averages.
+        : (20/07/2011) Better doc file.
+        : (03/08/2011) Sigma level selectable and median.
+        : (27/08/2012) Faster sigma-clipping.
+        : (06/02/2014) Only optparse.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (31/07/2015) pythpn3 porting.
+        : (18/05/2017) Minor update.
+        : (16/11/2021) SRPSTATS porting
+"""
+
+
+
+import os, os.path, sys, warnings
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+import SRP.SRPAstro as SRPAstro
+import numpy
+from astropy.io import fits
+from SRPSTATS.AverSigmaClippFrameFast import AverSigmaClippFrameFast
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+
+
+
+parser = OptionParser(usage="usage: %prog [-h] -i arg1 [-m] -o arg2 [-v]", version="%prog 3.4.0")
+parser.add_option("-i", "--inputfilelist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input BIAS FITS file list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-o", "--outfile", action="store", nargs=1, type="string", dest="outbiasfile", help="Output BIAS FITS file")
+parser.add_option("-s", "--sigma", action="store", nargs=1, type="float", default=5.0,dest="sigmal", help="Sigma level for clipping (default 5)")
+parser.add_option("-m", "--median", action="store_true", help="Perform a median")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist and options.outbiasfile:
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    #
+    if options.sigmal < 0.0:
+        parser.error("Sigma level must be positive.")
+    #
+    if os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        flist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                flist.append(dt.strip().split()[0])
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+        if options.verbose:
+            print("Computing bias...")
+        tdata = []
+        thead = []
+        tshape = []
+        if options.verbose:
+            print("%10s %10s %10s %s" % ("Average", "stdev", "median", "frame"))
+        for i in range(len(flist)):
+            hdr = fits.open(flist[i])
+            tdata.append(hdr[0].data)
+            thead.append(hdr[0].header)
+            tshape.append(hdr[0].data.shape)
+            hdr.close()
+            if tshape[0][0] != tshape[i][0] or tshape[0][1] != tshape[i][1]:
+                print("Frames (%s) must be of the same size." % flist[i])
+                sys.exit(1)
+            grange = SRPUtil.getGoodRange((1,tshape[0][0],1,tshape[0][1]),10.0)
+            if options.verbose:
+                stard = numpy.array([tdata[-1][grange[0]:grange[1],grange[2]:grange[3]]])
+                print("%10.2f %10.2f %10.2f %s" % (numpy.mean(stard), numpy.std(stard), numpy.median(stard), flist[i]))
+#               print shapex, shapey
+        if options.median:
+            res = numpy.median(tdata,axis=0)
+            newdata = res
+        else:
+            res = AverSigmaClippFrameFast(tdata,upsig=options.sigmal)
+            newdata = res[0]
+        if options.verbose:
+            grange = SRPUtil.getGoodRange((1,tshape[0][0],1,tshape[0][1]),10.0)
+            stard = newdata[grange[0]:grange[1],grange[2]:grange[3]]
+            print("----")
+            print("%10.2f %10.2f %10.2f %s" % (numpy.mean(stard), numpy.std(stard), numpy.median(stard), "BIAS"))
+        if options.verbose:
+            print("Saving bias file: %s" % sname+options.outbiasfile)
+        else:
+            print(sname+options.outbiasfile)
+        nfts = fits.PrimaryHDU(newdata,thead[0])
+        nftlist = fits.HDUList([nfts])
+        warnings.resetwarnings()
+        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+        if options.verbose:
+            nftlist.writeto(sname+options.outbiasfile,overwrite=True,output_verify='warn')
+        else:
+            nftlist.writeto(sname+options.outbiasfile,overwrite=True,output_verify='ignore')
+        AddHeaderComment(sname+options.outbiasfile,(("SRPComment: bias frame generated from %d files." % len(tdata)),
+            ("SRPComment: FITS header from the first file in list.")))
+        warnings.resetwarnings()
+        warnings.filterwarnings('always', category=UserWarning, append=True)
+        nftlist.close()
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

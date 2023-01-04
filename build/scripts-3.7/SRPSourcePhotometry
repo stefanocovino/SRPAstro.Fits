@@ -1,0 +1,131 @@
+#!/users/covino/Pacchetti/anaconda3/bin/python
+""" Code to extract sources from a fits frame
+
+Context : SRP
+Module  : SRPPhotometryFinder
+Author  : Stefano Covino
+Date    : 19/07/2022
+E-mail  : stefano.covino@inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose :
+
+
+History : (25/06/2010) First version.
+"""
+
+
+from SRPFITS.Photometry.FitsPhotometryClass import FitsPhotometry
+#from SRPFITS.Fits import FitsConstants
+from SRPFITS.Fits.IsFits import IsFits
+from SRP.SRPSytem.ReadTextFile import ReadTextFile
+import argparse
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-a", "--airmass", action="store", nargs='1', type=float, default=0.0, help="Airmass", metavar='airmass')
+parser.add_argument("-e", "--exptime", action="store", nargs='1', type=float, default=1.0, help="Exposure time (s)", metavar='exptime')
+parser.add_argument("-f", "--fitsfile", action="store", nargs='1', help="Input FITS file", metavar='ifits')
+parser.add_argument("-i", "--inputtab", action="store", nargs='1', help="Input file with star position", metavar='itab')
+parser.add_argument("-k", "--extcoeff", action="store", nargs='1', type=float, default=0.0, help="Extinction coefficient (mag)", metavar='extcoeff')
+
+#parser.add_argument("-o", "--object", action="store", nargs=2, type=float, required=True, help="Object coordinates (hh.ddd dd.ddd)", metavar=('RA','DEC'))
+#parser.add_argument("-p", "--framepath", action="store", required=True, help="Base path for FITS frames", metavar='frpath')
+#parser.add_argument("-s", "--selpattern", action="store", default='*.fits', help="Selection pattern", metavar='spatt')
+parser.add_argument("-v", "--verbose", action="store_true", help="Fully describe operations")
+parser.add_argument("--version", action="version", version=__version__)
+parser.add_argument("-z", "--zeropoints", action="store", nargs='2', type=float, default=(25.0,0.0), help="Zero point (mag, magerr)", metavar=('mag','magerr'))
+options = parser.parse_args()
+
+
+
+if options.fitsfile and options.inputtab:
+    if not IsFits(options.fitsfile):
+        parser.error("Fits file %s not found." % options.fitsfile)
+    #
+    ifile = ReadTextFile(options.inputtab)
+    if ifile != None:
+        parser.error("Input file %s not found or not readable." % options.inputtab)
+    #
+    if options.exptime <= 0:
+        parser.error("Improper exposure time: %.3f." % options.exptime)
+    #
+    if options.airmass < 0:
+        parser.error("Improper airmass: %.3f." % options.airmass)
+    #
+    fphot = FitsPhotometry(options.fitsfile,ifile,option.exptime,options.airmass,optins.extcoeff,options.zeropoints)
+    #
+    
+    sys.exit()
+    
+    
+    # No more than one algorithm
+    if (options.native and options.daophot) or (options.native and options.sex) or (options.daophot and options.sex):
+        parser.error("You can select one only algorithm.")
+    # If non chosen daophot is the default
+    elif not (options.native or options.sex):
+        options.daophot = True
+    # Threshold meaning depend on the algorithm
+    if not options.thre:
+        if options.native:
+            options.thre = 5.0
+        elif options.daophot:
+            options.thre = 5.0
+        elif options.sex:
+            options.thre = 3.0
+    # Safety check on threshold
+    if options.thre < 0.0:
+        parser.error("Threshold must be positive.")
+    if options.verbose:
+        print("Threshold: %.2f" % options.thre)
+    # Minpix meaningful only for native mode
+    if (not options.native) and options.minpix != None:
+        parser.error("--minpix parameter meaningful only for native algorithm.")
+    # Deafult for minpix if meaningful
+    if options.native and not options.minpix:
+        options.minpix = 3
+    # Safey check on minpix
+    if options.native and options.minpix < 1:
+        parser.error("Minimum number of pixel must be greater than 1.")
+    if options.native and options.verbose:
+        print("Minimum number of pixel: %d" % options.minpix)
+    # Open file
+    if options.verbose:
+        print("Opening FITS file %s" % options.fits)
+    d = FitsImage(options.fits)
+    if d == None:
+        parser.error("Problem in reading FITS file %s" % options.fits)
+
+    # Sources
+    if options.verbose:
+        print("Source extraction...")
+    if options.daophot:
+        d.DAOSources(options.thre)
+    elif options.native:
+        d.Sources(options.thre,options.minpix)
+    elif options.sex:
+        d.SexSources(options.thre)
+    if options.verbose:
+        print("FWHM computation...")
+    d.GetFWHM()
+    if options.verbose:
+        print("Source list sorting...")
+    d.SortSourceList()
+
+    # Save results
+    froot,fext = os.path.splitext(options.fits)
+    if options.skycat:
+        fname = froot+FitsConstants.SkyData
+    else:
+        fname = froot+FitsConstants.RegData
+    if options.verbose:
+        print("Output %s creation with %d entries." % (fname, len(d.List)))
+    else:
+        print("%d %s" % (len(d.List), fname))
+    f = open(fname,'w')
+    if options.skycat:
+        f.write(d.Skycat())
+    else:
+        f.write(str(d))
+    f.close()
+else:
+    parser.print_help()

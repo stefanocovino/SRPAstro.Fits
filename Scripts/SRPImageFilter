@@ -1,0 +1,170 @@
+#! python
+""" Code to filter image files
+
+Context : SRP
+Module  : SRPImageFilter.py
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage filtering of FITS frames.
+
+Usage   : SRPImageFilter [-h] -i arg1 [-m arg2] [-n] [-v]
+            -i file of list if files to be processed.
+            -m size of median filter.
+            -n NAN filtering.
+            The output files are produced applying a median filter of given size.
+
+History : (02/08/2011) First version.
+        : (04/09/2011) Better cosmetics.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (16/05/2014) Fltering NAN out.
+        : (18/05/2017) Minor update.
+"""
+
+
+
+import os, os.path, string, warnings
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import numpy
+from astropy.io import fits
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+from SRPFITS.Fits.IsFits import IsFits
+import scipy.ndimage.filters as SNF
+
+
+
+parser = OptionParser(usage="usage: %prog [-h] -i arg1 [-m arg2] [-n] [-v]", version="%prog 1.1.0")
+parser.add_option("-i", "--inputfilelist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list")
+parser.add_option("-m", "--median", action="store", nargs=1, type="int", dest="mediansize", help="Size of the median filter")
+parser.add_option("-n", "--nan", action="store_true", dest="nan", help="NAN data filtered out")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+if options.fitsfilelist and (options.mediansize or options.nan):
+    #
+    if options.mediansize != None and options.mediansize <= 0:
+        parser.error("Median filter size must be positive.")
+    elif options.mediansize > 0:
+        if options.verbose:
+            print("Median filter size: %d" % options.mediansize)
+    #
+    if options.verbose:
+        if options.nan:
+            print("NAN filtering active.")
+        else:
+            print("NAN filtering not active.")
+    #
+    if os.path.isfile(options.fitsfilelist) and not IsFits(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        froot,fext = os.path.splitext(options.fitsfilelist)
+        o = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,froot+SRPConstants.SRPScienceFile+fext,SRPFiles.WriteMode)
+        o.SRPOpenFile()
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                file = string.split(string.strip(dt))[0]
+                if not os.path.isfile(file):
+                    parser.error("Input FITS file %s not found" % file)
+                if options.verbose:
+                    print("FITS file selected: %s" % file)
+                if options.verbose:
+                    print("Loading frame...")
+                cb = fits.open(file)
+                cbdata = cb[0].data
+                cbhead = cb[0].header
+                cbshape = cb[0].data.shape
+                #
+                if options.verbose:
+                    print("Filtering...")
+                if options.mediansize:
+                    if options.verbose:
+                        print("Median filter...")
+                    cbf = SNF.median_filter(cbdata,options.mediansize)
+                else:
+                    cbf = cbdata
+                #
+                if options.nan:
+                    if options.verbose:
+                        print("NAN filtering...")
+                    cbfn = numpy.nan_to_num(cbf)
+                else:
+                    cbfn = cbf
+                #
+                root,ext = os.path.splitext(os.path.basename(file))
+                if options.verbose:
+                    print("Saving file: %s" % root+SRPConstants.SRPImaFltFile)
+                nflt = fits.PrimaryHDU(cbfn,cbhead)
+                nfltlist = fits.HDUList([nflt])
+                warnings.resetwarnings()
+                warnings.filterwarnings('ignore', category=UserWarning, append=True)
+                if options.verbose:
+                    nfltlist.writeto(root+SRPConstants.SRPImaFltFITS,overwrite=True,output_verify='warn')
+                else:
+                    nfltlist.writeto(root+SRPConstants.SRPImaFltFITS,overwrite=True,output_verify='ignore')
+                warnings.resetwarnings() 
+                warnings.filterwarnings('always', category=UserWarning, append=True)   
+                if options.mediansize:
+                    AddHeaderComment(root+SRPConstants.SRPImaFltFITS,(("SRPComment: Median filtered frame (size %d)." % options.mediansize),))                
+                if options.nan:
+                    AddHeaderComment(root+SRPConstants.SRPImaFltFITS,(("SRPComment: NAN filtered out."),))                
+                oentr = root+SRPConstants.SRPScienceFITS+SRPConstants.SRPTab+string.join(string.split(string.strip(dt))[1:])
+                o.SRPWriteFile(oentr+os.linesep)
+            else:
+                break
+        f.SRPCloseFile()
+        o.SRPCloseFile()
+    elif IsFits(options.fitsfilelist):
+        if options.verbose:
+            print("FITS file selected: %s" % options.fitsfilelist)
+        if options.verbose:
+            print("Loading frame...")
+        cb = fits.open(options.fitsfilelist)
+        cbdata = cb[0].data
+        cbhead = cb[0].header
+        cbshape = cb[0].data.shape
+        #
+        if options.verbose:
+            print("Filtering...")
+        if options.mediansize:
+            if options.verbose:
+                print("Median filter...")
+            cbf = SNF.median_filter(cbdata,options.mediansize)
+        else:
+            cbf = cbdata
+        #
+        if options.nan:
+            if options.verbose:
+                print("NAN filtering...")
+            cbfn = numpy.nan_to_num(cbf)
+        else:
+            cbfn = cbf
+        #
+        root,ext = os.path.splitext(os.path.basename(options.fitsfilelist))
+        if options.verbose:
+            print("Saving file: %s" % root+SRPConstants.SRPImaFltFITS)
+        else:
+            print(root+SRPConstants.SRPImaFltFITS)
+        nflt = fits.PrimaryHDU(cbfn,cbhead)
+        nfltlist = fits.HDUList([nflt])
+        warnings.resetwarnings()
+        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+        if options.verbose:
+            nfltlist.writeto(root+SRPConstants.SRPImaFltFITS,overwrite=True,output_verify='warn')
+        else:
+            nfltlist.writeto(root+SRPConstants.SRPImaFltFITS,overwrite=True,output_verify='ignore')
+        warnings.resetwarnings()
+        warnings.filterwarnings('always', category=UserWarning, append=True)   
+        if options.mediansize:
+            AddHeaderComment(root+SRPConstants.SRPImaFltFITS,(("SRPComment: Median filtered frame (size %d)." % options.mediansize),))                
+        if options.nan:
+            AddHeaderComment(root+SRPConstants.SRPImaFltFITS,(("SRPComment: NAN filtered out."),))                
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

@@ -1,0 +1,153 @@
+#! python
+""" Code to extract FITS frame extensions.
+
+Context : SRP
+Module  : SRPFitsExtension
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPFitsExtension [-h] [-e] -i file [-n ext] [-p] [-v] [--version]
+            -e Extract extensions
+            -i Input FITS file list or single FITS file
+            -n Plane or extension number to extract
+            -p Extract planes
+
+History : (24/08/2011) First version.
+        : (30/08/2011) Possibility to choose the plane to extract.
+        : (11/03/2012) Plane management added.
+        : (06/02/2014) Bug fixed.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (18/05/2017) Minor update.
+"""
+
+
+__version__ = '1.2.3'
+
+
+import argparse, os
+from astropy.io import fits
+import warnings
+from SRPFITS.Fits.FitsImageClass import FitsImage
+from SRPFITS.Fits.IsFits import IsFits
+
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--extension", action="store_true", help="Extract extensions")
+parser.add_argument("-i", "--inputlist", action="store", help="Input FITS file list or single FITS file", metavar='file', required=True)
+parser.add_argument("-n", "--nplane", action="store", type=int, help="Plane or extension number to extract", metavar='ext')
+parser.add_argument("-p", "--plane", action="store_true", help="Extract planes")
+parser.add_argument("-v", "--verbose", action="store_true", help="Fully describe operations")
+parser.add_argument("--version", action="version", version=__version__)
+options = parser.parse_args()
+
+
+if options.extension and options.plane:
+    parser.error("You cannot extract extensions and planes together.")
+#
+if options.inputlist:
+    # Input files
+    if os.path.isfile(options.inputlist):
+        # FITS file
+        if IsFits(options.inputlist):
+            if options.verbose:
+                print("Input FITS file is: %s" % options.inputlist)
+            FITSfileflag = True
+        # FITS file list
+        else:
+            try:
+                f = open(options.inputlist)
+            except IOError:
+                parser.error("FITS file list not readable.")
+            #
+            if options.verbose:
+                print("Input FITS file list is: %s" % options.inputlist)
+            FITSfileflag = False
+        #                        
+        flist = []
+        nentr = 0
+        while True:
+            if FITSfileflag:
+                flist.append(options.inputlist)
+                nentr = 1
+                break
+            else:
+                try:
+                    dt = f.readline()
+                except IOError:
+                    parser.error("FITS file list not readable.")
+                if dt != '':
+                    flist.append(dt.split()[0])
+                    nentr = nentr + 1
+                    if not IsFits(flist[nentr-1]):
+                        parser.error("Input FITS file %s not found" % flist[nentr-1])
+                    if options.verbose:
+                        print("FITS file selected: %s" % flist[nentr-1])    
+                else:
+                    break
+        if not FITSfileflag:
+            f.close()
+        #
+        # Begin analysis
+        for fr in flist:
+            frhdu = fits.open(fr)
+            #
+            if options.extension:
+                if options.verbose:
+                    frhdu.info()
+                    print()
+            elif options.plane:
+                frhduh = frhdu[0].header
+                try:
+                    np = frhduh['NAXIS3']
+                except KeyError:
+                    np = 0
+                if options.verbose:
+                    print("%d planes available." % np)
+            if options.extension:
+                nel = len(frhdu)
+            elif options.plane:
+                nel = np
+            # 
+            # if extraction flag is set
+            if options.extension:
+                r,e = os.path.splitext(fr)
+                for i in range(nel):
+                    if options.nplane == None or options.nplane == i:
+                        frhduh = frhdu[i].header
+                        frhdud = frhdu[i].data
+                        newnamefile = "%s_%d%s" % (r,i,e)
+                        if options.verbose:
+                            print("Creating file: %s" % newnamefile)
+                        warnings.resetwarnings()
+                        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+                        if options.verbose:
+                            fits.writeto(newnamefile,frhdud,frhduh,overwrite=True,output_verify='warn')
+                        else:
+                            fits.writeto(newnamefile,frhdud,frhduh,overwrite=True,output_verify='ignore')
+                        warnings.resetwarnings() 
+                        warnings.filterwarnings('always', category=UserWarning, append=True)
+            elif options.plane:
+                r,e = os.path.splitext(fr)
+                for i in range(nel):
+                    frhdud = frhdu[0].data[i]
+                    if options.nplane == None or options.nplane == i:
+                        newnamefile = "%s_%d%s" % (r,i,e)
+                        if options.verbose:
+                            print("Creating file: %s" % newnamefile)
+                        warnings.resetwarnings()
+                        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+                        if options.verbose:
+                            fits.writeto(newnamefile,frhdud,frhduh,overwrite=True,output_verify='warn')
+                        else:
+                            fits.writeto(newnamefile,frhdud,frhduh,overwrite=True,output_verify='ignore')
+                        warnings.resetwarnings() 
+                        warnings.filterwarnings('always', category=UserWarning, append=True)
+            #
+            frhdu.close()
+    else:
+        parser.error("Input file or file list does not exist.")
+else:
+    parser.print_help()

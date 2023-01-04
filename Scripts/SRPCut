@@ -1,0 +1,172 @@
+#! python
+""" Code to extracxt a subimage.
+
+Context : SRP
+Module  : SRPCut
+Status  : approved
+Author  : Stefano Covino
+Date    : 19/10/2017
+E-mail  : stefano.covino@brera.ianf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPCut -e arg1 arg2 arg3 arg4 [-h] -i arg5 [-v]
+            -h for the help message.
+            -e indicates the distances in pixels from frame border (leftx, lowy, rightx, upy)
+            -i is the input file list.
+            -o is the suffix for output files.
+            -v is for a verbose output.
+
+History : (14/10/2003) First version.
+        : (03/02/2005) Optparse.
+        : (31/10/2010) Pyfit porting and more flexibiity in cutting.
+        : (16/06/2011) Cosmetic improvements.
+        : (28/03/2013) Optional output filename.
+        : (28/01/2014) New pyfits syntax.
+        : (06/02/2014) Only optparse.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (16/07/2014) Minor bug fix in data management of non standard FITS headers.
+        : (08/02/2017) Python3 porting.
+        : (18/05/2017) Porting to astropy and minor update.
+        : (19/10/2017) Minor bug correction in case of FITS file in input.
+"""
+
+
+
+import os, warnings
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from astropy.io import fits
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+from SRPFITS.Fits.IsFits import IsFits
+
+
+
+
+parser = OptionParser(usage="usage: %prog -e arg1 arg2 arg3 arg4 [-h] -i arg5 [-o arg6] [-v]", version="%prog 2.2.8")
+parser.add_option("-e", "--edge", action="store", nargs=4, type="int", dest="edge", help="Distances in pixel from frame border (leftx, lowy, rightx, upy)")
+parser.add_option("-i", "--inputfilelist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list")
+parser.add_option("-o", "--outsuffix", action="store", nargs=1, default='cut', type="string", dest="suffix", help="Output file suffix")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist and options.edge:
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    if options.edge:
+        for i in options.edge:
+            if i < 0:
+                parser.error("Distance from frame border cannot be negative.")
+        lx = options.edge[0]
+        ly = options.edge[1]
+        rx = options.edge[2]
+        uy = options.edge[3]
+    #
+    if options.suffix != '':
+        outsuffix = options.suffix
+    else:
+        outsuffix = SRPConstants.SRPCutFile
+    #
+    fifile = IsFits(options.fitsfilelist)
+    if fifile:
+        flist = [options.fitsfilelist,]
+    elif os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        frooti,fexti = os.path.splitext(options.fitsfilelist)
+        #
+        o = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,frooti+outsuffix+fexti,SRPFiles.WriteMode)
+        o.SRPOpenFile()
+        flist = []
+        rlist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                flist.append(dt.strip().split()[0])
+                rlist.append('.'.join(dt.strip().split()[1:]))
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+    if options.verbose:
+        print("Loading frames...")
+    for i in range(len(flist)):
+        hdr = fits.open(flist[i])
+        tdata = hdr[0].data
+        thead = hdr[0].header
+        tshape = hdr[0].data.shape
+        hdr.close()
+        rrange = SRPUtil.getRange(thead)
+        if options.verbose:
+            if i == 0:
+                print("%5s %10s %10s %10s" % ("Frame", "Naxes", "axis1", "axis2"))
+            if len(rrange) > 2:
+                print("%5d %10.2f %10.2f %10.2f" % (i+1, 2, rrange[1]-rrange[0]+1, rrange[3]-rrange[2]+1))
+            else:
+                print("%5d %10.2f %10.2f" % (i+1, 2, rrange[1]-rrange[0]+1))
+            if len(rrange) > 2:
+                if rrange[1]-rrange[0]-(lx+rx)+1 > 0 and rrange[3]-rrange[2]-(ly+uy)+1 > 0:
+                    if i == 0:
+                        print(SRPConstants.SRPTab+"New size:")
+                    print("%5d %10.2f %10.2f %10.2f" % (i+1, 2, rrange[1]-rrange[0]-(lx+rx)+1, rrange[3]-rrange[2]-(ly+uy)+1))
+                else:
+                    print("Operation not possible on frame %s." % flist[i])
+            elif len(rrange) == 2:
+                if rrange[1]-rrange[0]-(lx+rx)+1 > 0:
+                    if i == 0:
+                        print(SRPConstants.SRPTab+"New size:")
+                    print("%5d %10.2f %10.2f" % (i+1, 2, rrange[1]-rrange[0]-(lx+rx)+1))
+                else:
+                    print("Operation not possible on frame %s." % flist[i])
+        #        
+        if len(rrange) > 2:
+            ntdata = tdata[rrange[2]-1+ly:rrange[3]-uy,rrange[0]-1+lx:rrange[1]-rx]
+        else:
+            ntdata = tdata[rrange[0]-1+dx:rrange[1]-rx]
+        froot,fext = os.path.splitext(flist[i])
+        nfname = froot+outsuffix+'.fits'
+        if options.verbose:
+            print("Saving new frame: %s" % nfname)
+        else:
+            print(nfname)
+        if not fifile:
+            o.SRPWriteFile(nfname+SRPConstants.SRPTab+rlist[i]+os.linesep)
+        if len(rrange) > 2:
+            thead['NAXIS1'] = rrange[1]-(lx+rx)
+            thead['NAXIS2'] = rrange[3]-(ly+uy)
+            if options.verbose:
+                print("Preserving astrometry")
+            if 'CRPIX1' in thead and 'CRPIX2' in thead:
+                old = thead['CRPIX1']
+                thead['CRPIX1'] = old - lx
+                old = thead['CRPIX2']
+                thead['CRPIX2'] = old - ly
+        else:
+            thead['NAXIS1'] = rrange[1]-(lxrx)
+        nfts = fits.PrimaryHDU(ntdata,thead)
+        nftlist = fits.HDUList([nfts])
+        warnings.resetwarnings()
+        warnings.filterwarnings('ignore', category=UserWarning, append=True)
+        if options.verbose:
+            nftlist.writeto(nfname,overwrite=True,output_verify='warn')
+        else:
+            nftlist.writeto(nfname,overwrite=True,output_verify='ignore')
+        warnings.resetwarnings()
+        warnings.filterwarnings('always', category=UserWarning, append=True)   
+        AddHeaderComment(nfname,(("SRPComment: frame cut at %d %d %d %d." % (lx,ly,rx,uy)),))
+    if not fifile:
+        o.SRPCloseFile()
+else:
+    parser.print_help()

@@ -1,0 +1,131 @@
+#! python
+""" Code to align science frame files
+
+Context : SRP
+Module  : SRPAlignImaging.py
+Version : 1.4.0
+Status  : approved
+Author  : Stefano Covino
+Date    : 31/07/2015
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the alignment of science frame FITS files.
+
+Usage   : SRPAlignImaging [-h] -i arg1 [-v]
+            -i is the list of FITS images to align
+
+History : (27/05/2003) First version.
+        : (13/06/2003) Better messages.
+        : (14/06/2003) Bug in output file creation removed.
+        : (03/02/2005) Optparse.
+        : (11/09/2009) Better pipes.
+        : (27/05/2010) Bug correction.
+        : (03/08/2010) Temporary file removed.
+        : (20/07/2011) eclipse python library no more imported
+        : (10/12/2011) Bugs corrected.
+        : (21/05/2012) Better import style.
+        : (31/07/2015) python3 porting.
+"""
+
+
+
+import os, os.path
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+from SRP.SRPSystem.Pipe import Pipe
+from SRP.SRPSystem.Which import Which
+
+
+parser = OptionParser(usage="usage: %prog [-h] -i arg1 [-v]", version="%prog 1.3.2")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist:
+    #
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    if os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        froot,fext = os.path.splitext(options.fitsfilelist)
+        o = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,froot+SRPConstants.SRPShiftedFile+fext,SRPFiles.WriteMode)
+        o.SRPOpenFile()
+        flist = []
+        rlist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '':
+                flist.append(dt.strip().split()[0])
+                rlist.append(''.join(dt.strip().split()[1:]))
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+        #
+        if options.verbose:
+            print("Loading frames...")
+        if Which(SRPConstants.SRPcatcube) == None:
+            parser.error("%s package not found." % SRPConstants.SRPcatcube)
+        argl = ' '
+        for i in flist:
+            argl = argl + str(i) + ' '
+        argl = argl + '-o %s' % (sname+SRPConstants.SRPTempFile)
+        cmd = SRPConstants.SRPcatcube+argl
+        res = Pipe(cmd)
+        if res == None:
+            print("FITS file processing failed.")
+            sys.exit(SRPConstants.SRPExitFailure)
+        #
+        if Which(SRPConstants.SRPxcorr2d) == None:
+            parser.error("Eclipse package not found.")
+        kv = Pipe(SRPConstants.SRPxcorr2d+' -r 1 '+sname+SRPConstants.SRPTempFile)
+        if kv == None:
+            parser.error("Problem in %s FITS file list." % options.fitsfilelist)
+        kyl = kv.decode().split(os.linesep)
+        xsfh = []
+        ysfh = []
+        for i in range(1,len(kyl)):
+            if kyl[i-1].split()[0] == 'plane' and kyl[i-1].split()[1].split(':')[0] != '#':
+                l = int(kyl[i-1].split()[1].split(':')[0])
+                xsfh.append(float(kyl[i-1].split()[2]))
+                ysfh.append(float(kyl[i-1].split()[3]))
+                xsfh[l-1] = -1.0 * xsfh[l-1]
+                ysfh[l-1] = -1.0 * ysfh[l-1]
+                if options.verbose:
+                    print("X and Y shifts for file %s: %.1f %.1f " % (flist[l-1], xsfh[l-1], ysfh[l-1]))
+        #
+        if os.path.exists(sname+SRPConstants.SRPTempFile):
+            os.remove(sname+SRPConstants.SRPTempFile)
+        #
+        if len(xsfh) != len(flist):
+            parser.error("Problem in %s FITS file list." % options.fitsfilelist)
+        #
+        nflist = []
+        if Which(SRPConstants.SRPwarping) == None:
+            parser.error("Eclipse package not found.")
+        for m in range(len(flist)):
+            parstr = " -t '%.1f %.1f' %s " % (xsfh[m], ysfh[m], flist[m])
+            froot,fext = os.path.splitext(flist[m])
+            nflist.append(froot+SRPConstants.SRPShiftedFile+fext)
+            ky = Pipe(SRPConstants.SRPwarping+parstr+froot+SRPConstants.SRPShiftedFile+fext)
+            if ky == None:
+                parser.error("%s not a FITS file." % flist[m])
+            if options.verbose:
+                print("File %s generated." % nflist[m])
+            o.SRPWriteFile(nflist[m]+SRPConstants.SRPTab+rlist[m]+os.linesep)
+        o.SRPCloseFile()
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

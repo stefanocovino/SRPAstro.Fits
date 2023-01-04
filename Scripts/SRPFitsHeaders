@@ -1,0 +1,102 @@
+#! python
+""" Code to get/add information to/from FITS headers
+
+Context : SRP
+Module  : SRPFitsHeaders.py
+Version : 1.1.1
+Status  : approved
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPFitsHeaders [-h] [-e ext] -f file [-k key] [-o file]
+            [-n newkey newkey newkey] [-v] [--version]
+            -e FITS extension
+            -f Input FITS file
+            -k Keyword to be searched for
+            -o Output FITS file
+            -n New keyword (key value comment)
+
+History : (27/04/2011) First version.
+        : (06/10/2011) Multiple file management.
+        : (18/05/2017) Minor update.
+"""
+
+__version__ = '1.1.1'
+
+import os, os.path
+import argparse
+from SRPFITS.Fits.AddHeaderEntry import AddHeaderEntry
+from SRPFITS.Fits.GetHeader import GetHeader
+from SRPFITS.Fits.GetHeaderValue import GetHeaderValue
+from SRP.SRPSystem.ListOfFitsFiles import ListOfFitsFiles
+
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-e", "--extension", action="store", type=int, help="FITS extension", default=0, metavar='ext')
+parser.add_argument("-f", "--fitsfile", action="store", help="Input FITS file", required=True, metavar='file')
+parser.add_argument("-k", "--keyword", action="store", help="Keyword to be searched for", metavar='key')
+parser.add_argument("-o", "--outfitsfile", action="store", help="Output FITS file", metavar='file')
+parser.add_argument("-n", "--newkeyword", action="store", nargs=3, help="New keyword (key value comment)", metavar='newkey')
+parser.add_argument("-v", "--verbose", action="store_true", help="Fully describe operations")
+parser.add_argument("--version", action="version", version=__version__)
+options = parser.parse_args()
+
+if options.fitsfile:
+    #
+    lstfls = ListOfFitsFiles(options.fitsfile)
+    if lstfls == None:
+        parser.error("File or file list not found or processable.")
+    #
+    if options.extension < 0:
+        parser.error("Extension muct be positive.")
+    #
+    for fls in lstfls:
+        if options.verbose:
+            print("Processing file %s: " % fls)
+            print("With extension: %d" % options.extension)
+        else:
+            print(fls)
+        if not options.newkeyword and not options.outfitsfile:
+            if options.keyword:
+                res = GetHeaderValue(fls, options.keyword, options.extension)
+            else:
+                res = GetHeader(fls, options.extension)
+        #
+            if res[0] == None:
+                if options.verbose:
+                    print("File or header not found.")
+                else:
+                    print() 
+            else:
+                if options.keyword:
+                    if options.verbose:
+                        print("Header: %s = %s" % (options.keyword, res[0]))
+                    else:
+                        print(res[0])                
+                else:
+                    if options.verbose:
+                        print("Headers:")
+                        print(res[0])
+                    else:
+                        print(res[0])
+        elif options.newkeyword and not options.keyword:
+            if options.outfitsfile:
+                ofile = options.outfitsfile
+            else:
+                ofile = fls
+            res = AddHeaderEntry(fls,[options.newkeyword[0],],[options.newkeyword[1],],[options.newkeyword[2],],ofile,options.extension)
+            if res[0] == False:
+                if options.verbose:
+                    print("File or header not found.")
+                else:
+                    print() 
+            else:
+                if options.verbose:
+                    print("Header %s with value %s and comment %s created in file %s." % (options.newkeyword[0],options.newkeyword[1],options.newkeyword[2],ofile))
+                else:
+                    print(options.newkeyword[1])
+else:
+    parser.print_help()

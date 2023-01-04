@@ -1,0 +1,6 @@
+SRPAstro>=4.4
+sep
+photutils
+astropy
+astLib>=0.11.5
+astroalign

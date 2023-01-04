@@ -1,0 +1,224 @@
+#! python
+""" Code to create a FLAT file
+
+Context : SRP
+Module  : SRPFlatSpectroscopy.py
+Author  : Stefano Covino
+Date    : 16/11/2021
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the creation of a FLAT FITS file.
+
+Usage   : SRPFlatSpectroscopy -b arg1 [-h] -i arg2 [-m] -o arg3 [-s arg4] [-v]
+            -b is the BIAS/DARK/SKY file (or value) to be subtracted
+            -i is the list of files to be processes
+            -m median rather then sigma-clipped average
+            -o is the output FITS file name
+            -s sigma levele (default 5)
+            
+          Compute a flat-field frame by means of a 5sigma positive clipped average or a median.
+
+History : (18/02/2005) First version.
+        : (11/09/2009) Better pipes.
+        : (28/08/2011) Full rewriting.
+        : (21/05/2012) Better import style.
+        : (27/08/2012) Faster sigma-clipping.
+        : (08/05/2013) Better check in input list.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (08/02/2017) Python3 porting.
+        : (18/05/2017) Minor update.
+        : (26/09/2018) Non standard header management.
+        : (16/11/2021) SRPSTATS porting.
+"""
+
+
+
+import os, os.path, string, warnings, sys
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+import numpy
+from astropy.io import fits
+from SRPSTATS.AverSigmaClippFrameFast import AverSigmaClippFrameFast
+from SRPFITS.Fits.AddHeaderComment import AddHeaderComment
+from SRPFITS.Fits.GetData import GetData
+from SRP.SRPSystem.Pipe import Pipe
+from SRP.SRPSystem.Which import Which
+
+
+
+
+parser = OptionParser(usage="usage: %prog -b arg1 [-h] -i arg2 [-m] -o arg3 [-s arg4] [-v]", version="%prog 2.1.4")
+parser.add_option("-i", "--inputfilelist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FLAT FITS file list")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-o", "--outfile", action="store", nargs=1, type="string", dest="outflatfile", help="Output FLAT FITS file")
+parser.add_option("-b", "--bias", action="store", nargs=1, type="string", dest="inpbiasfile", help="Input BIAS FITS file (or value)")
+parser.add_option("-s", "--sigma", action="store", nargs=1, type="float", default=5.0,dest="sigmal", help="Sigma level for clipping (default 5)")
+parser.add_option("-m", "--median", action="store_true", help="Perform a median")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist and options.inpbiasfile and options.outflatfile:
+    sname = SRPFiles.getSRPSessionName()
+    if options.verbose:
+        print("Session name %s retrieved." % sname)
+    #
+    if options.sigmal < 0.0:
+        parser.error("Sigma level must be positive.")
+    #    
+    if os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        flist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if len(dt.strip()) > 0:
+                flist.append(dt.strip().split()[0])
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+    #
+    if options.verbose:
+        print("Computing flat...")
+    tdata = []
+    thead = []
+    tshape = []
+    if options.verbose:
+        print("%10s %10s %10s %s" % ("Average", "stdev", "median", "frame"))
+    for i in range(len(flist)):
+        hdr = fits.open(flist[i])
+        tdata.append(hdr[0].data)
+        thead.append(hdr[0].header)
+        tshape.append(hdr[0].data.shape)
+        if tshape[0][0] != tshape[i][0] or tshape[0][1] != tshape[i][1]:
+            print("Frames (%s) must be of the same size." % flist[i])
+            sys.exit(1)
+        grange = SRPUtil.getGoodRange((1,tshape[0][0],1,tshape[0][1]),10.0)
+        if options.verbose:
+            stard = numpy.array([tdata[-1][grange[0]:grange[1],grange[2]:grange[3]]])
+            print("%10.2f %10.2f %10.2f %s" % (numpy.mean(stard), numpy.std(stard), numpy.median(stard), flist[i]))
+#           print shapex, shapey
+    #
+    if os.path.isfile(options.inpbiasfile):
+        if options.verbose:
+            print("Input BIAS FITS file is: %s." % options.inpbiasfile)
+        bsr = fits.open(options.inpbiasfile)
+        bdata = bsr[0].data
+        bhead = bsr[0].header
+        bshape = bsr[0].data.shape
+    elif options.inpbiasfile.isdigit():
+        if options.verbose:
+            print("Input BIAS level is: %s." % options.inpbiasfile)
+        try:
+            bdata = float(options.inpbiasfile)*numpy.ones(tshape[0])
+        except:
+            bdata = numpy.zeros(tshape[0])
+        bshape = tshape[0]
+    else:
+        parser.error("Input BIAS FITS file %s not found" % options.inpbiasfile)
+    #
+    if tshape[0][0] != bshape[0] or tshape[0][1] != bshape[1]:
+        print("Frames (%s) must be of the same size." % options.inpbiasfile)
+        sys.exit(1)
+    grange = SRPUtil.getGoodRange((1,bshape[0],1,bshape[1]),10.0)
+    if options.verbose:
+        stard = numpy.array([bdata[grange[0]:grange[1],grange[2]:grange[3]]])
+        print("%10.2f %10.2f %10.2f %s" % (numpy.mean(stard), numpy.std(stard), numpy.median(stard), options.inpbiasfile))    
+    #
+    if options.verbose:
+        print("BIAS subtraction...")
+    for i in range(len(tdata)):    
+        tdata[i] = numpy.subtract(tdata[i],bdata)
+    #
+    tweight = []
+    for i in tdata:
+        tweight.append(numpy.median(i))
+    if options.verbose:
+        print("Creating FLAT frame...")
+    if options.median:
+        res = numpy.median(tdata,axis=0)
+        flat = res
+    else:
+        res = AverSigmaClippFrameFast(tdata,tweight,upsig=options.sigmal)
+        flat = res[0]
+    # saving temp frame
+    nfts = fits.PrimaryHDU(flat,thead[0])
+    nftlist = fits.HDUList([nfts])
+    warnings.resetwarnings()
+    warnings.filterwarnings('ignore', category=UserWarning, append=True)
+    nftlist.writeto(sname+SRPConstants.SRPTempFile,overwrite=True,output_verify='ignore')
+    warnings.resetwarnings() 
+    warnings.filterwarnings('always', category=UserWarning, append=True)   
+    # Collapsing
+    if options.verbose:
+        print("Collapsing FLAT frame...")
+    if Which(SRPConstants.SRPcollapse) == None:
+        parser.error("Eclipse package not found.")
+    ky = Pipe(SRPConstants.SRPcollapse+' -f '+sname+SRPConstants.SRPTempFile)
+    if ky == None:
+        parser.error("Problem in %s FITS file list." % options.fitsfilelist)
+     # Expand
+    if options.verbose:
+        print("Expanding FLAT frame...")
+    # Nome input
+    root,ext = os.path.splitext(sname+SRPConstants.SRPTempFile)
+    nname = root+'_line'+ext
+    # parametro
+    parstring1 = ' -u %d ' % tshape[0][0]
+    ky = Pipe(SRPConstants.SRPcollapse+parstring1+nname)
+    if ky == None:
+        parser.error("Problem in %s FITS file list." % options.fitsfilelist)
+    # Remove spectral pattern
+    if options.verbose:
+        print("Spectral pattern removal...")
+    root,ext = os.path.splitext(nname)
+    nnname = root+'_unc'+ext
+    os.remove(nname)
+    #
+    fb = GetData(sname+SRPConstants.SRPTempFile)[0]
+    fbn = GetData(nnname)[0]
+    fbres = numpy.divide(fb,fbn)
+    #
+    stfbres = numpy.array([fbres[grange[0]:grange[1],grange[2]:grange[3]]])
+    if options.verbose:
+        print("Normalizing flat frame...")
+    fbresn =  fbres / numpy.median(stfbres)
+    #
+    if options.verbose:
+        print("Computing statistics on final FLAT frame...")
+    if options.verbose:
+        print("%5s %10s %10s %10s" % ("FLAT", "average", "stdev", "median"))
+        print("%5s %10.2f %10.2f %10.2f" % ("", numpy.mean(fbresn), numpy.std(fbresn), numpy.median(fbresn)))
+    #
+    if options.verbose:
+        print("Saving FLAT file: %s" % sname+options.outflatfile)
+    else:
+        print(sname+options.outflatfile)
+    nfts = fits.PrimaryHDU(fbresn,thead[0])
+    nftlist = fits.HDUList([nfts])
+    warnings.resetwarnings()
+    warnings.filterwarnings('ignore', category=UserWarning, append=True)
+    if options.verbose:
+        nftlist.writeto(sname+options.outflatfile,overwrite=True,output_verify='warn')
+    else:
+        nftlist.writeto(sname+options.outflatfile,overwrite=True,output_verify='ignore')
+    warnings.resetwarnings()
+    warnings.filterwarnings('always', category=UserWarning, append=True)   
+    AddHeaderComment(sname+options.outflatfile,(("SRPComment: Spectroscopy flat-field frame generated from %d files." % len(tdata)),
+        ("SRPComment: FITS header from the first file in list.")))
+    #
+    os.remove(sname+SRPConstants.SRPTempFile)
+    os.remove(nnname)
+else:
+    parser.print_help()

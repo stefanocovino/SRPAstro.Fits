@@ -1,0 +1,108 @@
+#! python
+""" Code to derive basic statistics on FITS frames
+
+Context : SRP
+Module  : SRPFitsStats.py
+Version : 1.1.1
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+
+Usage   : SRPFitsStats -i arg1 [-h] [-r arg1 arg2 arg3 arg4] [-v]
+            -i Input FITS file list or single FITS file
+            Returns mean, stnadard deviation, median and maximum value
+
+History : (26/10/2003) First version.
+        : (26/08/2011) Better cosmetics.
+        : (21/01/2014) Possibility to select just a subregion in a frame.
+        : (18/05/2017) Minor update.
+"""
+
+
+
+import os, os.path
+from optparse import OptionParser
+from SRPFITS.Fits.FitsImageClass import FitsImage
+from SRPFITS.Fits.GetHeaderValue import GetHeaderValue
+from SRPFITS.Fits.IsFits import IsFits
+
+
+parser = OptionParser(usage="usage: %prog -i arg1 [-h] [-r arg1 arg2 arg3 arg4] [-v]", version="%prog 1.1.1")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list or single FITS file")
+parser.add_option("-r", "--region", action="store", nargs=4, type="int", help="Select a subregion in pixel (leftx bottomy rightx uppery)")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist:
+    # Input files
+    if os.path.isfile(options.fitsfilelist):
+        # FITS file
+        if IsFits(options.fitsfilelist):
+            if options.verbose:
+                print("Input FITS file is: %s" % options.fitsfilelist)
+            FITSfileflag = True
+        # FITS file list
+        else:
+            try:
+                f = open(options.fitsfilelist)
+            except IOError:
+                parser.error("FITS file list not readable.")
+            #
+            if options.verbose:
+                print("Input FITS file list is: %s" % options.fitsfilelist)
+            FITSfileflag = False
+        #                        
+        flist = []
+        nentr = 0
+        while True:
+            if FITSfileflag:
+                flist.append(options.fitsfilelist)
+                nentr = 1
+                break
+            else:
+                try:
+                    dt = f.readline()
+                except IOError:
+                    parser.error("FITS file list not readable.")
+                if dt != '':
+                    flist.append(dt.split()[0])
+                    nentr = nentr + 1
+                    if not IsFits(flist[nentr-1]):
+                        parser.error("Input FITS file %s not found" % flist[nentr-1])
+                    if options.verbose:
+                        print("FITS file selected: %s" % flist[nentr-1])    
+                else:
+                    break
+        if not FITSfileflag:
+            f.close()
+        #
+        if options.verbose:
+                if options.region:
+                    print("Selected region (pixel): %d %d %d %d" % options.region)
+                else:
+                    print("Full frame analysis")
+        #
+        # Begin analysis
+        for fr in flist:
+            ffits = FitsImage(fr)
+            if not options.region:
+                res = ffits.GetStats()
+            else:
+                NX = GetHeaderValue(fr,'NAXIS1',0)[0]
+                NY = GetHeaderValue(fr,'NAXIS2',0)[0]
+                if (1 <= options.region[0] < options.region[2]) and (options.region[2] <= NX) and (1 <= options.region[1] < options.region[3]) and (options.region[3] <= NY):
+                    res = ffits.GetStats(region=options.region)
+                else:
+                    parser.error("Unapplicable region filter for file %s." % fr)
+            if options.verbose:
+                print("Fits file %(ffile)s: mean = %(mean).1f, std = %(std).1f, median = %(median).1f, maximum = %(max).1f" % {'ffile':ffits.Name, 
+                    'mean':res[0], 'std':res[1], 'median':res[2], 'max':res[3]})
+            else:
+                print("%(ffile)s %(mean).1f %(std).1f %(median).1f %(max).1f" % {'ffile':ffits.Name, 'mean':res[0], 'std':res[1], 'median':res[2], 
+                    'max':res[3]})
+    else:
+        parser.error("Input file or file list does not exist.")
+else:
+    parser.print_help()

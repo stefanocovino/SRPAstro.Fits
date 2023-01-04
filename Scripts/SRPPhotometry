@@ -1,0 +1,290 @@
+#! python
+""" Code to perform photometry on FITS frames
+
+Context : SRP
+Module  : SRPPhotometry.py
+Author  : Stefano Covino
+Date    : 02/02/2022
+E-mail  : stefano.covino@inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Manage the photometry of FITS files.
+
+Usage   : SRPPhotometry [-e arg1] [-g arg2] [-h] [-H arg3 arg4] -i arg5 [-r arg6] [-s arg7] [-S] [-v] [-z arg8 arg9]
+            -i Input FITS file list or single FITS file
+            -g Gain (e-/ADU) for error estimate in photometry
+            -s Saturation level (ADU) for frame(s)
+            -e Exposure time (sec) for frame(s)
+            -S ESO-Skycat output
+            -r Radius (pixel) for aperture photometry
+            -z Zero point and error for photometry
+            -H FITS file header for exposure time, duration, airmass
+                and filter [default: MJD-OBS EXPTIME AIRMASS FILTER]
+
+History : (30/05/2003) First version.
+        : (04/06/2003) Management of non-numeric exposure times.
+        : (15/06/2003) Selection of stars for photometry.
+        : (29/06/2003) Better search for exposure times.
+        : (20/09/2003) Create SExtractor paramter files only if there are not anymore.
+        : (10/10/2003) Aperture photometry in output file.
+        : (23/12/2003) Minor correction and zero-point management.
+        : (03/02/2005) Optparse.
+        : (01/12/2005) CygWin porting.
+        : (09/06/2006) Different out filename extension for skycat format.
+        : (13/06/2006) Minor correction.
+        : (20/10/2008) Minor correction.
+        : (11/09/2009) Better pipes.
+        : (21/05/2010) Better management of FITS header.
+        : (26/08/2010) Minor improvements.
+        : (28/09/2010) Better coding.
+        : (30/09/2010) More input data.
+        : (01/10/2010) Code cosmesis.
+        : (13/10/2010) shutil not imported.
+        : (15/10/2010) Better management of saturation level.
+        : (26/10/2010) No more RA,DEC from sextractor.
+        : (07/08/2011) Better cosmetics.
+        : (20/08/2011) Exptime in output file.
+        : (30/10/2011) Source ellipticity in output file.
+        : (21/05/2012) Better import style.
+        : (17/06/2012) Bug in Pipe import.
+        : (11/02/2013) CLASS_STAR parameter in output and threshold in input.
+        : (18/08/2013) Better management of optional parameters.
+        : (21/02/2014) Better management of radius parameters.
+        : (04/01/2017) Minor bugs porting to python 3.x.
+        : (12/01/2017) More minor bugs.
+        : (16/05/2017) Minor update.
+        : (18/05/2017) Minor update.
+        : (14/05/2020) Better file management.
+        : (02/02/2021) Better management of astropy.log.
+"""
+
+
+
+import os, os.path, shutil, string
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from SRPFITS.Fits.GetHeaderValue import GetHeaderValue
+from SRPFITS.Fits.IsFits import IsFits
+from SRPFITS.Frames import SExtractorConstants
+from SRP.SRPSystem.Pipe import Pipe
+from SRP.SRPSystem.Which import Which
+from SRPFITS.Fits.GetHeader import GetHeader
+from SRPFITS.Frames.Pixel2WCS import Pixel2WCS
+from astropy import log
+log.setLevel('WARNING')
+
+parser = OptionParser(usage="usage: %prog [-e arg1] [-g arg2] [-h] [-H arg3 arg4] -i arg5 [-r arg6] [-s arg7] [-t arg8] [-S] [-v] [-z arg9 arg10]", version="%prog 2.4.0")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list or single FITS file")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-g", "--gain", action="store", type="float", dest="gainvalue", help="Gain (e-/ADU) for error estimate in photometry")
+parser.add_option("-s", "--saturation", action="store", type="float", dest="satvalue", help="Saturation level (ADU) for frame(s)")
+parser.add_option("-e", "--exptime", action="store", type="float", dest="exptime", help="Exposure time (sec) for frame(s)")
+parser.add_option("-S", "--skycat", action="store_true", dest="skycat", help="ESO-Skycat output")
+parser.add_option("-r", "--radius", action="store", type="float", dest="radius", help="Radius (pixel) for aperture photometry")
+parser.add_option("-t", "--threshold", action="store", type="float", dest="threshold", help="Threshold for detection and analysis")
+parser.add_option("-z", "--zerpoints", action="store", nargs=2, type="float", dest="zpoints", default=(25.0,0.0), help="Zero point and error for photometry")
+parser.add_option("-H", "--headerinfo", action="store", nargs=4, type="string", dest="headinf", default=('MJD-OBS','EXPTIME','AIRMASS','FILTER'),help="FITS file header for exposure time, duration, airmass and filter [default: MJD-OBS EXPTIME AIRMASS FILTER]")
+(options, args) = parser.parse_args()
+
+
+if options.fitsfilelist:
+    # Input file
+    if os.path.isfile(options.fitsfilelist):
+        # FITS file
+        if IsFits(options.fitsfilelist):
+            if options.verbose:
+                print("Input FITS file is: %s" % options.fitsfilelist)
+            FITSfileflag = True
+        # FITS file list
+        else:
+            f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+            f.SRPOpenFile()
+            if options.verbose:
+                print("Input FITS file list is: %s" % options.fitsfilelist)
+            FITSfileflag = False
+        #                        
+        flist = []
+        nentr = 0
+        while True:
+            if FITSfileflag:
+                flist.append(options.fitsfilelist)
+                nentr = 1
+                break
+            else:
+                dt = f.SRPReadFile()
+                if dt != '':
+                    flist.append(string.split(string.strip(dt))[0])
+                    nentr = nentr + 1
+                    if not os.path.isfile(flist[nentr-1]):
+                        parser.error("Input FITS file %s not found" % flist[nentr-1])
+                    if options.verbose:
+                        print("FITS file selected: %s" % flist[nentr-1])    
+                else:
+                    break
+        if not FITSfileflag:
+            f.SRPCloseFile()
+        # Fill data
+        hflist = []
+        mflist = []
+        aflist = []
+        wflist = []
+        for i in range(len(flist)):
+            # exptime
+            eh = GetHeaderValue(flist[i],options.headinf[1])
+            if eh[0] != None:
+                try:
+                    hflist.append(float(eh[0]))
+                except:
+                    hflist.append(1.0)
+            else:
+                hflist.append(1.0)
+            # date
+            eh = GetHeaderValue(flist[i],options.headinf[0])
+            if eh[0] != None:
+                try:
+                    mflist.append(eh[0])
+                except:
+                    mflist.append(-99.0)
+            else:
+                mflist.append(-99.0)
+            # airmass
+            eh = GetHeaderValue(flist[i],options.headinf[2])
+            if eh[0] != None:
+                try:
+                    aflist.append(float(eh[0]))
+                except:
+                    aflist.append(1.0)
+            else:
+                aflist.append(1.0)
+            # airmass
+            eh = GetHeaderValue(flist[i],options.headinf[3])
+            if eh[0] != None:
+                try:
+                    wflist.append(eh[0])
+                except:
+                    wflist.append('Unknown')
+            else:
+                wflist.append('Unknown')
+            #
+    else:
+        parser.error("Input FITS file or file list %s not found" % options.fitsfilelist)
+    if options.gainvalue:
+        if options.gainvalue > 0.0:
+            Gain = options.gainvalue
+            if options.verbose:
+                print("Gain value is %.2f" % Gain)
+    #
+    if options.satvalue:
+        if options.satvalue > 0.0:
+            Saturation = options.satvalue
+            if options.verbose:
+                print("Saturation level is %.1f" % Saturation)
+    else:
+        Saturation = 1e7
+    #
+    if options.radius:
+        if options.radius > 0.0:
+            Radius = options.radius
+            if options.verbose:
+                print("Aperture photometry radius is %.1f" % Radius)
+    #
+    zpl = [25.0,0.0]
+    zpl[0] = options.zpoints[0]
+    zpl[1] = options.zpoints[1]
+    if options.verbose:
+        print("Zero point is %.3f +/- %.3f" % (zpl[0], zpl[1]))
+    #
+    if options.threshold:
+        if options.threshold > 0.0:
+            Threshold = options.threshold
+            if options.verbose:
+                print("Threshold is %.2f" % Threshold)
+    #
+    if Which(SExtractorConstants.SRPsex) == None and Which(SExtractorConstants.SRPsex_cyg) == None and Which(SExtractorConstants.SRPsex_new) == None:
+        parser.error("SExtractor package not found.")
+    # sextractor parameters
+    pflcreated = False
+    for i in range(len(SExtractorConstants.SexFName)):
+        if not SRPFiles.IsReadable(SExtractorConstants.SexFName[i]):
+            shutil.copyfile(os.path.join(SExtractorConstants.BasePath,SExtractorConstants.GenParSet[i]),os.path.join('.',SExtractorConstants.SexFName[i]))
+            pflcreated = True
+    if options.verbose and pflcreated:
+        print("SExtractor parameter files created.")
+    # Process
+    for i in range(len(flist)):
+        if options.verbose:
+            print("Processing file: %s..." % flist[i])
+        if options.exptime:
+            Exptime = options.exptime
+        else:
+            Exptime = hflist[i]
+            if Exptime == None:
+                Exptime = 1.0
+        if options.verbose:
+            print("Exposure time is %.1f" % Exptime)
+        #
+        root,ext = os.path.splitext(flist[i])
+        parstr1 = SExtractorConstants.SRPsex+' '+flist[i]+' -c SRP.sex '
+        parstr2 = " "
+        if options.gainvalue:
+            parstr2 = parstr2 + " -GAIN %.2f " % (Gain)
+        if options.satvalue:
+            parstr2 = parstr2 + " -SATUR_LEVEL %.1f " % (Saturation)
+        if options.radius:
+            parstr2 = parstr2 + " -PHOT_APERTURES %.1f " % (2*Radius)
+        if options.threshold:
+            parstr2 = parstr2 + " -DETECT_THRESH %.2f -ANALYSIS_THRESH %.2f" % (Threshold, Threshold)
+        #print (parstr1+parstr2)
+        stardata = Pipe(parstr1+parstr2)
+        if stardata == None:
+            parser.error("%s not a FITS file." % flist[i])
+        starlist = SRPUtil.getStarData(stardata.decode().strip().split(os.linesep), Exptime, zpl, mflist[i], aflist[i], wflist[i])
+        if options.skycat:
+            g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPPhotomFileSky, SRPFiles.WriteMode)
+        else:
+            g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPPhotomFile, SRPFiles.WriteMode)
+        g.SRPOpenFile()
+        if options.skycat:
+            g.SRPWriteFile("serv_type: catalog"+os.linesep)
+            g.SRPWriteFile("long_name: SRP catalog for file %s" % flist[i]+os.linesep)
+            g.SRPWriteFile("short_name: %s" % root+SRPConstants.SRPPhotomFileSky+os.linesep)
+            g.SRPWriteFile("url: ./%s" % root+SRPConstants.SRPPhotomFileSky+os.linesep)
+            g.SRPWriteFile("id_col: 0"+os.linesep)
+            g.SRPWriteFile("x_col: 1"+os.linesep)
+            g.SRPWriteFile("y_col: 2"+os.linesep)
+            g.SRPWriteFile("symbol: {} circle 4"+os.linesep)
+            g.SRPWriteFile("Id\tX\tY\tRA\tDEC\tmag_ap\temag_ap\tsky\tfmax\tmag\temag\tFWHM\tMJD\tAirmass\tFilter\tExptime\tEllipticity\tClassification"+os.linesep)
+            g.SRPWriteFile("---------"+os.linesep)
+        ndetec = 0
+        #
+        # RA,DEC from sextractor not correct.
+        fhed = GetHeader(flist[i])[0]
+        pixc = []
+        for l in range(len(starlist)):
+            pixc.append((starlist[l].X,starlist[l].Y))
+        fc = Pixel2WCS(fhed,pixc)
+        # file header
+        for l in range (len(starlist)):
+            if starlist[l].fmax < Saturation:
+                starlist[l].RA = fc[l][0]
+                starlist[l].DEC = fc[l][1]
+                g.SRPWriteFile(starlist[l])
+                ndetec = ndetec + 1
+        if options.skycat:
+            g.SRPWriteFile("EOD"+os.linesep)
+        g.SRPCloseFile()
+        if options.verbose:
+            print("%d objects selected." % ndetec)
+        else:
+            if options.skycat:
+                print(ndetec, root+SRPConstants.SRPPhotomFileSky)
+            else:
+                print(ndetec, root+SRPConstants.SRPPhotomFile) 
+        if options.verbose:
+            if options.skycat:
+                print("Photometric results reported in file %s" % root+SRPConstants.SRPPhotomFileSky)
+            else:
+                print("Photometric results reported in file %s" % root+SRPConstants.SRPPhotomFile)
+else:
+    parser.print_help()

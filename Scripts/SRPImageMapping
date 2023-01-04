@@ -1,0 +1,416 @@
+#! python
+""" Code to align science frame files
+
+Context : SRP
+Module  : SRPImageMapping
+Version : 1.9.0
+Author  : Stefano Covino
+Date    : 15/03/2022
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/utenti/covino
+Purpose : Derive rototraslastion parameters for FITS images.
+
+Usage   :
+
+
+History : (28/10/2008) First version.
+        : (13/11/2008) Quicker execution.
+        : (17/11/2008) Better FWHM filtering.
+        : (27/11/2008) Logical improvement.
+        : (14/08/2009) Possibility to choose translation only.
+        : (08/09/2009) Minor correction.
+        : (11/09/2009) pyfits transition.
+        : (28/05/2010) Possibility to force integer shifts in pure translation.
+        : (04/06/2010) Possibility to give maximum tolerance for association.
+        : (22/06/2010) Minor correction.
+        : (27/08/2010) Deepness level selectable.
+        : (27/09/2010) Minor correction.
+        : (14/10/2010) Better import style.
+        : (06/08/2011) Better cosmetics.
+        : (05/03/2012) Import path updated.
+        : (21/05/2012) Better imoprt style.
+        : (21/02/2014) Only optparse.
+        : (27/10/2014) sextractor source extraction added.
+        : (08/02/2017) Python3 porting.
+        : (14/03/2017) AngleRange fucntion.
+        : (16/05/2017) DAOPHOT find.
+        : (18/05/2017) astropy.io.fits.
+        : (24/06/2020) open instead of file.
+        : (07/09/2021) Porting to SRPSTATS.
+        : (15/03/2022) Better FWHM filter.
+"""
+
+
+
+import os, os.path, sys, math
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from SRPFITS.Frames.SexObjectClass import SexObjects
+from SRPFITS.Frames.DAOObjectClass import DAOObjects
+from SRPSTATS.AverIterSigmaClipp import AverIterSigmaClipp
+from astropy.io import fits
+from SRP.SRPMath.AngleRange import AngleRange
+from SRPFITS.GetFWHM import GetFWHM
+
+
+NMINMAG = 20
+
+
+
+def totMatch (pars):
+    x0 = pars[0]
+    y0 = pars[1]
+    alpha = pars[2]
+    nmatch = 0
+    mtchlst = []
+    for i in listmag1:
+        for l in listmag2:
+            l.NX,l.NY = SRPUtil.rotoTrasla((l.X,l.Y),x0,y0,alpha,hX,hY)
+            if (gxmin <= l.NX <= gxmax and gymin <= l.NY <= gymax) and not (l in mtchlst):
+                td = math.sqrt((l.NX-i.X)**2+(l.NY-i.Y)**2)
+                if td < fwhm:
+                    nmatch = nmatch + 1
+                    mtchlst.append(l)
+                    break
+    return nmatch
+
+
+
+def computeAngles(l1,l2,ris,MINANG=5.0):
+    x1r = l1[ris[0]].X
+    y1r = l1[ris[0]].Y
+    x2r = l1[ris[1]].X
+    y2r = l1[ris[1]].Y
+    x3r = l1[ris[2]].X
+    y3r = l1[ris[2]].Y
+    x1t = l2[ris[3]].X
+    y1t = l2[ris[3]].Y
+    x2t = l2[ris[4]].X
+    y2t = l2[ris[4]].Y
+    x3t = l2[ris[5]].X
+    y3t = l2[ris[5]].Y
+    m1r = (y2r-y1r)/(x2r-x1r)
+    m2r = (y3r-y1r)/(x3r-x1r)
+    tangr = math.fabs((m1r-m2r)/(1+m1r*m2r))
+    m1t = (y2t-y1t)/(x2t-x1t)
+    m2t = (y3t-y1t)/(x3t-x1t)
+    tangt = math.fabs((m1t-m2t)/(1+m1t*m2t))
+    angr = SRPUtil.rad2deg(math.atan(tangr))
+    angt = SRPUtil.rad2deg(math.atan(tangt))
+#        print ris, angr, angt, tangr, tangt
+    if math.fabs(angr-angt) < MINANG:
+        return True
+    else:
+        return False
+
+
+def commonPerc (sx,sy,ang,hx,hy,rx,ry):
+    npix = 0
+    for i in range(2*int(hx)):
+        for l in range(2*int(hy)):
+            nx,ny = SRPUtil.rotoTrasla((i+1,l+1),sx,sx,ang,hx,hy)
+            if 1 <= nx <= 2*rx and 1 <= ny <= 2*ry:
+                npix = npix + 1
+    return npix/float((2*rx*2*ry))
+
+
+
+
+def lookforpars (list1,list2,fwhm,reflistX,reflistY,matchp,hx,hy,minang=1.0,PureShift=False):
+    area = 1.0
+    nm = 0
+    mpars = 0,0,0
+    for r in range(len(list1)):
+        for rr in range(len(list1)):
+            for rrr in range(len(list1)):
+                for o in range(len(list2)):
+                    for oo in range(len(list2)):
+                        for ooo in range(len(list2)):
+                            if r != rr and r != rrr and rr != rrr and o != oo and o != ooo and oo != ooo:
+                                dist1 = math.sqrt((list1[r].X-list1[rr].X)**2+(list1[r].Y-list1[rr].Y)**2)
+                                dist2 = math.sqrt((list2[o].X-list2[oo].X)**2+(list2[o].Y-list2[oo].Y)**2)
+                                dist3 = math.sqrt((list1[r].X-list1[rrr].X)**2+(list1[r].Y-list1[rrr].Y)**2)
+                                dist4 = math.sqrt((list2[o].X-list2[ooo].X)**2+(list2[o].Y-list2[ooo].Y)**2)
+                                if math.fabs(dist1-dist2) < fwhm/2.35 and math.fabs(dist3-dist4) < fwhm/2.35:
+                                    DX = list2[o].X-list2[oo].X
+                                    DY = list2[o].Y-list2[oo].Y
+                                    DNX = list1[r].X-list1[rr].X
+                                    DNY = list1[r].Y-list1[rr].Y
+                                    try:
+                                        sina = (DNY-DY*DNX/DX)/(DX+DY**2/DX)
+                                        cosa = (DNY+DX*DNX/DY)/(DY+DX**2/DY)
+                                    except ZeroDivisionError:
+                                        break
+                                    sangles1 = SRPUtil.rad2deg(math.atan2(sina,cosa))
+                                    DX = list2[o].X-list2[ooo].X
+                                    DY = list2[o].Y-list2[ooo].Y
+                                    DNX = list1[r].X-list1[rrr].X
+                                    DNY = list1[r].Y-list1[rrr].Y
+                                    try:
+                                        sina = (DNY-DY*DNX/DX)/(DX+DY**2/DX)
+                                        cosa = (DNY+DX*DNX/DY)/(DY+DX**2/DY)
+                                    except ZeroDivisionError:
+                                        break
+                                    sangles2 = SRPUtil.rad2deg(math.atan2(sina,cosa))
+                                    if PureShift:
+                                        condition = ((math.fabs(sangles1) < minang) and (math.fabs(sangles2) < minang))
+                                    else:
+                                        condition = (math.fabs(sangles1-sangles2) < minang)
+                                    if condition:
+                                        if PureShift:
+                                            sangles = 0.0
+                                        else:
+                                            sangles = (sangles1 + sangles2)/2.0
+                                        sx = list1[rr].X - hx - (list2[oo].X-hx)*math.cos(SRPUtil.deg2rad(sangles)) + (list2[oo].Y-hy)*math.sin(SRPUtil.deg2rad(sangles))
+                                        sy = list1[rr].Y - hy - (list2[oo].X-hx)*math.sin(SRPUtil.deg2rad(sangles)) - (list2[oo].Y-hy)*math.cos(SRPUtil.deg2rad(sangles))
+#                                                                                print r,rr,rrr,o,oo,ooo,sx,sy,sangles,sangles1,sangles2
+                                        inizio = [sx,sy,sangles]
+                                        mpars = inizio
+                                        nm = totMatch(inizio)
+                                        area = commonPerc (sx,sy,sangles,hx,hy,reflistX,reflistY)
+#                                                                                print nm
+                                        if nm >= matchp:
+                                            return area,nm,mpars[0],mpars[1],mpars[2],True
+    return area,nm,mpars[0],mpars[1],mpars[2],False
+
+
+
+
+parser = OptionParser(usage="usage: %prog [-v] [-h] [-d/-s] [-f] -i arg1 [-l arg2] [-m arg3] [-n arg4] [-o] [-p] [-t]", version="%prog 1.8.2")
+parser.add_option("-d", "--daofind", action="store_true", dest="daofind", help="Source extracted by DAOPHOT")
+parser.add_option("-f", "--fwhmfilter", action="store", dest="fwhmf", type="float", nargs=2, help="Filter for FWHM value (pixel_min pixel_max)")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="fitsfilelist", help="Input FITS file list")
+parser.add_option("-l", "--level", action="store", nargs=1, type="float", dest="level", default=2.0, help="Search deepness.")
+parser.add_option("-m", "--matchstars", action="store", nargs=1, type="int", dest="matchp", default=5, help="Minimum number of stars in common area for matching")
+parser.add_option("-n", "--nobj", action="store", type="int", dest="nobj", default=10, help="Number of objects for matching search")
+parser.add_option("-o", "--outfiles", action="store_true", dest="outfiles", help="Save files with object positions")
+parser.add_option("-p", "--pureint", action="store_true", dest="pure", default=False, help="Integer pixel shift for pure translation")
+parser.add_option("-r", "--radius", action="store", nargs=1, type="float", dest="radius", default=0.0, help="Max tolerance (pixel)")
+parser.add_option("-s", "--sexfind", action="store_true", dest="sexfind", help="Source extraxcted by SExtractor")
+parser.add_option("-t", "--translation", action="store_true", dest="transla", default=False, help="Force pure translation")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.radius < 0.0:
+    parser.error("Tolerance must be positive.")
+    sys.exit(SRPConstants.SRPExitFailure)
+
+
+if options.fitsfilelist:
+    if os.path.isfile(options.fitsfilelist):
+        f = SRPFiles.SRPFile(SRPConstants.SRPLocalDir,options.fitsfilelist,SRPFiles.ReadMode)
+        f.SRPOpenFile()
+        if options.verbose:
+            print("Input FITS file list is: %s." % options.fitsfilelist)
+        flist = []
+        rlist = []
+        nentr = 0
+        while True:
+            dt = f.SRPReadFile()
+            if dt != '' and len(dt) > 2:
+                flist.append(dt.strip().split()[0])
+                rlist.append('.'.join(dt.strip().split()[1:]))
+                nentr = nentr + 1
+                if not os.path.isfile(flist[nentr-1]):
+                    parser.error("Input FITS file %s not found" % flist[nentr-1])
+                if options.verbose:
+                    print("FITS file selected: %s" % dt.strip().split()[0])
+            else:
+                break
+        f.SRPCloseFile()
+        if not 2 <= options.matchp <= 19:
+            parser.error("Matching number of stars must be in range [2..19].")
+        if not options.nobj >= 3:
+            parser.error("Number of matching objects too low.")
+        if options.level < 0:
+            parser.error("Search deepness must be positive.")
+        # Reference frame
+        reffile = flist[0]
+        if options.verbose:
+            print("FITS reference frame: %s" % reffile)
+        starlist = []
+        #
+        daophot = False
+        sex = False
+        if options.daofind and options.sexfind:
+            parser.error("Only one extraction method can be chosen.")
+        elif options.daofind and not options.sexfind:
+            daophot = True
+        elif not options.daofind and options.sexfind:
+            sex = True
+        else:
+            daophot = True
+        #
+        if options.verbose:
+            if daophot:
+                print("Data extraction with DAOPHOT...")
+            elif sex:
+                print("Data extraction with SExtractor...")
+        #
+        for i in range(len(flist)):
+            if daophot:
+                stlist = []
+                d = DAOObjects(flist[i],options.level)
+                d.FindDAOObjects()
+                if len(d.ListEntries) == 0:
+                    print("FITS file %s can not be processed." % flist[i])
+                    sys.exit(SRPConstants.SRPExitFailure)
+                d.ListEntries.sort()
+                d.ListEntries.reverse()
+                for l in d.ListEntries:
+                    stlist.append(SRPUtil.PeakData((l.Id,l.X,l.Y,l.Npix,l.Flux/l.Npix,1.,1.,1.,l.Peak,1.,1,1.,l.Flux)))
+            elif sex:
+                stlist = []
+                d = SexObjects(flist[i],options.level)
+                d.FindSexObjects()
+                if len(d.ListEntries) == 0:
+                    print("FITS file %s can not be processed." % flist[i])
+                    sys.exit(SRPConstants.SRPExitFailure)
+                d.ListEntries.sort()
+                d.ListEntries.reverse()
+                for l in d.ListEntries:
+                    stlist.append(SRPUtil.PeakData((l.Id,l.X,l.Y,l.npix,1.,1.,1.,1.,l.peak,1.,1,l.ellip,l.flux)))
+            #
+            hhfits = fits.open(flist[i])
+            hh = hhfits[0].header
+            irange = SRPUtil.getRange(hh)
+            grange = SRPUtil.getGoodRange(irange,1.0)
+            if i == 0:      # ref frame
+                gxmin = grange[0]
+                gxmax = grange[1]
+                gymin = grange[2]
+                gymax = grange[3]
+            halfsizeX, halfsizeY = irange[1]/2, irange[3]/2
+            del hh
+            hhfits.close()
+            stlistgood = []
+            Xl = []
+            Yl = []
+            # remove objects close to the edges
+            for l in stlist:
+                if grange[0] < l.X < grange[1] and grange[2] < l.Y < grange[3]:
+                    stlistgood.append(l)
+                    Xl.append(l.X)
+                    Yl.append(l.Y)
+            # compute FWHM
+            fwhml = GetFWHM(Xl,Yl,flist[i])
+            sgclist = []
+            for l,fw in zip(stlistgood,fwhml):
+                l.FWHM = fw
+                if l.FWHM > 0.0:
+                    sgclist.append((l.FWHM,1.0))
+            fwhm = AverIterSigmaClipp(sgclist)[0]
+            #
+            if options.fwhmf:
+                stlistgoodflt = []
+                nlistfwhm = []
+                for l in stlistgood:
+                    if options.fwhmf[0] < l.FWHM < options.fwhmf[1]:
+                        stlistgoodflt.append(l)
+                        nlistfwhm.append(l.FWHM)
+                stlistgood = stlistgoodflt
+                fwhm = AverIterSigmaClipp(nlistfwhm)[0]
+            #
+            starlist.append((stlistgood,fwhm,flist[i],(halfsizeX,halfsizeY)))
+        # Begin fit
+        if options.verbose:
+            print("Roto-traslation parameters search:")
+        root,ext = os.path.splitext(options.fitsfilelist)
+        g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPMapFile+ext, SRPFiles.WriteMode)
+        g.SRPOpenFile()
+#                msg = "# Filename\tX shift\tY Shift\tRotation Angle\tX rotation center\tY rotation center\tFWHM\tCommon area\tMatched stars\tComment"
+#                if options.verbose:
+#                        print msg
+#                g.SRPWriteFile(msg+os.linesep)
+        reflist = starlist[0]
+        reffwhm = reflist[1]
+        reflist[0].sort()
+        reflist[0].reverse()
+        for i in starlist:
+            if options.verbose:
+                print("Processing file: %s" % i[2])
+            i[0].sort()
+            i[0].reverse()
+            nstars = options.nobj
+            nmagstars = NMINMAG
+            sx = 10.0
+            sy = -10.0
+            sangles = 0.0
+            if len(reflist[0]) < nstars or len(i[0]) < nstars:
+                if len(reflist[0]) <= len(i[0]):
+                    nstars = len(reflist[0])
+                else:
+                    nstars = len(i[0])
+            if len(reflist[0]) < nmagstars or len(i[0]) < nmagstars:
+                if len(reflist[0]) <= len(i[0]):
+                    nmagstars = len(reflist[0])
+                else:
+                    nmagstars = len(i[0])
+            list1 = []
+            list2 = []
+            listmag1 = []
+            listmag2 = []
+            hX = i[3][0]
+            hY = i[3][1]
+            fwhm = math.sqrt(reffwhm**2+i[1]**2)
+            for l in range(nstars):
+                list1.append(reflist[0][l])
+                list2.append(i[0][l])
+            for l in range(nmagstars):
+                listmag1.append(reflist[0][l])
+                listmag2.append(i[0][l])
+            # look for lines
+            ris = lookforpars(list1,list2,fwhm,reflist[3][0],reflist[3][1],options.matchp,hX,hY,1.0,options.transla)
+            sX,sY,sANG = ris[2],ris[3],ris[4]
+            if options.transla and options.pure:
+                sX,sY = round(sX),round(sY)
+            area,nm = ris[0],ris[1]
+            if ris[5] == True:
+                matchflag = "Matched"
+            else:
+                matchflag = "No match"
+            msg = "%s\t%.2f\t%.2f\t%.5f\t%.1f\t%.1f\t%.2f\t%.1f\t%d\t%s" % (i[2], sX, sY, AngleRange(sANG), hX, hY, i[1], 100*area, nm, matchflag)
+            if options.outfiles:
+                root,ext = os.path.splitext(reflist[2])
+                f = open(root+'.pos','w')
+                f.write("serv_type: catalog"+os.linesep)
+                f.write("long_name: SRP catalog for file %s" % root+'.pos'+os.linesep)
+                f.write("short_name: %s" % root+'.pos'+os.linesep)
+                f.write("url: ./%s" % root+'.pos'+os.linesep)
+                f.write("id_col: 0"+os.linesep)
+                f.write("x_col: 13"+os.linesep)
+                f.write("y_col: 14"+os.linesep)
+                f.write("symbol: {} circle 4"+os.linesep)
+                f.write("Id\tX\tY\tNpix\tMean\tDev\tMed\tMin\tMax\tFWHMX\tFWHMY\tFWHM\tFlux\tNX\tNY"+os.linesep)
+                f.write("---------"+os.linesep)
+                for ii in listmag1:
+                    f.write(str(ii))
+                f.write("EOD"+os.linesep)
+                f.close()
+                root,ext = os.path.splitext(i[2])
+                f = open(root+'.pos','w')
+                f.write("serv_type: catalog"+os.linesep)
+                f.write("long_name: SRP catalog for file %s" % root+'.pos'+os.linesep)
+                f.write("short_name: %s" % root+'.pos'+os.linesep)
+                f.write("url: ./%s" % root+'.pos'+os.linesep)
+                f.write("id_col: 0"+os.linesep)
+                f.write("x_col: 13"+os.linesep)
+                f.write("y_col: 14"+os.linesep)
+                f.write("symbol: {} circle 4"+os.linesep)
+                f.write("Id\tX\tY\tNpix\tMean\tDev\tMed\tMin\tMax\tFWHMX\tFWHMY\tFWHM\tFlux\tNX\tNY"+os.linesep)
+                f.write("---------"+os.linesep)
+                for ll in listmag2:
+                    f.write(str(ll))
+                f.write("EOD"+os.linesep)
+                f.close()
+            if options.verbose:
+                print(msg)
+            g.SRPWriteFile(str(msg)+os.linesep)
+        g.SRPCloseFile()
+    else:
+        parser.error("Input FITS file list %s not found" % options.fitsfilelist)
+else:
+    parser.print_help()

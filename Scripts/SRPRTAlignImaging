@@ -1,0 +1,137 @@
+#! python
+""" Code to align roto-translated frames
+
+Context : SRP
+Module  : SRPRTAlignImaging.py
+Author  : Stefano Covino
+Date    : 03/07/2018
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/users/covino
+Purpose : Manage the alignment of FITS files.
+
+Usage   : SRPRTAlignImaging -i arg1 [-v] [-x]
+            -i Input FITS file list
+            -x Generate exposure maps
+
+            The exposure maps can then be used to generate average files with
+            compensated exposures.
+
+History : (13/11/2008) First version.
+        : (02/08/2009) Better checks in input file reading.
+        : (15/08/2009) More efficient algorithm and better management of big rotations.
+        : (11/09/2009) Minor correction.
+        : (24/03/2010) Improved management of frames of different sizes.
+        : (07/08/2011) Better cosmetics.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (03/07/2018) Python3 porting.
+"""
+
+
+
+import math, os, os.path, sys
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+from astropy.io import fits
+import scipy.ndimage.interpolation as sni
+import numpy
+
+
+
+parser = OptionParser(usage="usage: %prog -i arg1 [-v] [-x]", version="%prog 2.1.2")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", dest="inputlist", help="Input FITS file list")
+parser.add_option("-x", "--expmap", action="store_true", dest="expmap", help="Generate exposure maps")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.inputlist:
+    if options.inputlist:
+        if os.path.isfile(options.inputlist):
+            if options.verbose:
+                print("Input FITS file list is: %s." % options.inputlist)
+        else:
+            parser.error("Input file list %s is not readable." % options.inputlist)
+    # read inputfile
+    listfls = []
+    f = open(options.inputlist)
+    dt = f.readlines()
+    f.close()
+    for i in dt:
+        il = i.split()
+        try:
+            fnam = il[0]
+            x0 = float(il[1])
+            y0 = float(il[2])
+            ang = float(il[3])
+            hx = float(il[4])
+            hy = float(il[5])
+            fw = float(il[6])
+            ar = float(il[7])
+            nm = int(il[8])
+            mf = il[9]
+        except IndexError:
+            parser.error("Wrong input file format.")
+            sys.exit(SRPConstants.SRPExitFailure)
+        dimx = round(2*(math.fabs(hx*math.cos(SRPUtil.deg2rad(-ang))) + math.fabs(hy*math.sin(SRPUtil.deg2rad(-ang)))))/2.0
+        dimy = round(2*(math.fabs(hx*math.sin(SRPUtil.deg2rad(-ang))) + math.fabs(hy*math.cos(SRPUtil.deg2rad(-ang)))))/2.0
+        listfls.append((fnam,x0,y0,ang,dimx,dimy,fw,ar,nm,mf,dimx,dimy))
+    # begin operations
+    root,ext = os.path.splitext(options.inputlist)
+    if options.verbose:
+        print("Output FITS file list is: %s" % root+SRPConstants.SRPWarpFile+ext)
+    if options.verbose and options.expmap:
+        print("Output exposure maps file list is: %s" % root+SRPConstants.SRPWarpFile+SRPConstants.SRPExpMap+ext)
+    f = open(root+SRPConstants.SRPWarpFile+ext,'w')
+    if options.expmap:
+        g = open(root+SRPConstants.SRPWarpFile+SRPConstants.SRPExpMap+ext,'w')
+    refxsize = listfls[0][4]
+    refysize = listfls[0][5]
+    for i in listfls:
+        hdu = fits.open(i[0])
+        scdt = hdu[0].data
+        # Exposure map
+        if options.expmap:
+            scdtxmp = numpy.ones(scdt.shape)
+        #
+        if options.verbose:
+            print("Processing file: %s" % i[0])
+        froot,fext = os.path.splitext(i[0])
+#                scdtrot = sni.rotate(scdt,-i[3],axes=(1,0))
+#                scdtrotshift = sni.shift(scdtrot,(i[2],i[1]))
+        sshfx = i[10]-refxsize
+        sshfy = i[11]-refysize
+        scdtrot = sni.rotate(scdt,-i[3],axes=(1,0))
+        scdtrotshift = sni.shift(scdtrot,(i[2]-sshfy,i[1]-sshfx))
+        #
+        if options.expmap:
+            scdtrotxmp = sni.rotate(scdtxmp,-i[3],axes=(1,0))
+            scdtrotshiftxmp = sni.shift(scdtrotxmp,(i[2]-sshfy,i[1]-sshfx))
+        #
+        hdu[0].data = scdtrotshift
+        if options.verbose:
+            hdu.writeto(froot+SRPConstants.SRPWarpFile+fext,overwrite=True,output_verify='warn')
+        else:
+            hdu.writeto(froot+SRPConstants.SRPWarpFile+fext,overwrite=True,output_verify='ignore')
+        #
+        if options.expmap:
+            hdu[0].data = scdtrotshiftxmp
+            if options.verbose:
+                hdu.writeto(froot+SRPConstants.SRPWarpFile+SRPConstants.SRPExpMap+fext,clobber=True,output_verify='warn')
+            else:
+                hdu.writeto(froot+SRPConstants.SRPWarpFile+SRPConstants.SRPExpMap+fext,clobber=True,output_verify='ignore')
+        hdu.close()
+        msg = "%s\t%.2f\t%.2f\t%.5f\t%.1f\t%.1f\t%.2f\t%.1f\t%d\t%s" % (froot+SRPConstants.SRPWarpFile+fext, 0.0, 0.0, 0.0, i[4], i[5], i[6], i[7], i[8], i[9])
+        f.write(msg+os.linesep)
+        if options.expmap:
+            msg = "%s\t%.2f\t%.2f\t%.5f\t%.1f\t%.1f\t%.2f\t%.1f\t%d\t%s" % (froot+SRPConstants.SRPWarpFile+SRPConstants.SRPExpMap+fext, 0.0, 0.0, 0.0, i[4], i[5], i[6], i[7], i[8], i[9])
+            g.write(msg+os.linesep)
+
+        #
+
+    f.close()
+    if options.expmap:
+        g.close()
+else:
+    parser.print_help()

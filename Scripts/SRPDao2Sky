@@ -1,0 +1,181 @@
+#! python
+""" Code to convert Daophot files to Skycat or ascii format.
+
+Context : SRP
+Module  : SRPDao2Sky
+Author  : Stefano Covino
+Date    : 18/12/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/~covino
+Purpose : Manage the conversion of output Daophot files to Skycat
+        :       or ascii format.
+
+Usage   : SRPDao2Sky [-h] [-v] [-a arg1] [-e arg2] -f arg3 [-S] [-z arg4 arg5]
+            -a Airmass of the analyzed frame
+            -e Exposure time (sec) for frame(s)
+            -f Input Daophot (.ap,.als) file
+            -S ESO-Skycat output
+            -z Zero point and error for photometry
+
+History : (25/10/2004) First version.
+        : (23/11/2004) Minor corrections.
+        : (03/02/2005) Optparse.
+        : (13/04/2006) Porting to cygwin.
+        : (29/10/2007) Better reading in case of high background for "ap" files.
+        : (14/11/2007) Better reading in case of high background for "als" files.
+        : (21/11/2007) Different output for skycat or ascii case.
+        : (11/09/2009) Minor correction.
+        : (20/08/2011) Better cosmetics.
+        : (18/12/2017) Minor upgrade.
+"""
+
+
+
+import os, os.path
+from optparse import OptionParser
+import SRP.SRPConstants as SRPConstants
+import SRP.SRPFiles as SRPFiles
+import SRP.SRPUtil as SRPUtil
+
+
+parser = OptionParser(usage="usage: %prog [-h] [-v] [-a arg1] [-e arg2] -f arg3 [-S] [-z arg4 arg5]", version="%prog 1.4.0")
+parser.add_option("-a", "--airmass", action="store", type="float", dest="airmass", help="Airmass of the analyzed frame", default=0.0)
+parser.add_option("-e", "--exptime", action="store", type="float", dest="exptime", help="Exposure time (sec) for frame(s)")
+parser.add_option("-f", "--file", action="store", nargs=1, type="string", dest="inputfilename", help="Input Daophot (.ap,.als) file")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+parser.add_option("-S", "--skycat", action="store_true", dest="skycat", help="ESO-Skycat output")
+parser.add_option("-z", "--zerpoints", action="store", nargs=2, type="float",dest="zpoints", help="Zero point and error for photometry")
+(options, args) = parser.parse_args()
+
+
+if options.inputfilename:
+    if os.path.isfile(options.inputfilename):
+        if options.verbose:
+            print("Input file name is: %s." % options.inputfilename)
+        root,ext = os.path.splitext(options.inputfilename)
+        if ext == SRPConstants.DAOApPhot and options.verbose:
+            print("DAOPHOT aperture photometry.")
+        elif ext == SRPConstants.DAOPsfPhot and options.verbose:
+            print("DAOPHOT psf photometry.")
+        if ext != SRPConstants.DAOApPhot and ext != SRPConstants.DAOPsfPhot:
+            parser.error("File extension %s not known." % ext)
+        if not options.exptime:
+            Exptime = 1.0
+        else:
+            Exptime = options.exptime
+        if options.verbose:
+            print("Exposure time is %.1f" % Exptime)
+        zpl = [0.0,0.0]
+        if options.zpoints:
+            zpl[0] = options.zpoints[0]
+            zpl[1] = options.zpoints[1]
+        if options.verbose:
+            print("Zero point is %.3f +/- %.3f" % (zpl[0], zpl[1]))
+        if options.airmass < 0.0:
+            airmass = 0.0
+        else:
+            airmass = options.airmass
+        if options.verbose:
+            if options.airmass < 0.0:
+                print("Airmass cannot be negative. Assumed zero.")
+        g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, options.inputfilename, SRPFiles.ReadMode)
+        g.SRPOpenFile()
+        dt = g.SRPReadTotFile()
+        g.SRPCloseFile()
+        stlist = []
+        if ext == SRPConstants.DAOApPhot:
+            for i in range(4,len(dt),3):
+                if len(dt[i]) > 2:
+                    dtlu = dt[i].split()
+                    dtld = dt[i+1].split()
+                    if dtld[0].count('.') > 1:
+                        ls = dt[i+1]
+                        ls = ls[0:ls.find('.')+4]+' '+ls[ls.find('.')+4:]
+                        dtld = ls.split()
+                    try:
+                        stlist.append(SRPUtil.DAOStarApData(Exptime,dtlu[0],dtlu[1],dtlu[2],dtlu[3:],dtld[3:],dtld[0],dtld[1],dtld[2],zpl,airmass))
+                    except:
+                        print("Error in input file from line %d to line %d." % (i+1,i+3))
+        else:
+            for i in range(3,len(dt)):
+                if len(dt[i]) > 2:
+                    dtl = dt[i].split()
+                    if dtl[4].count('.') > 1:
+                        ls = dtl[4]
+                        ls = ls[0:ls.find('.')+4]+' '+ls[ls.find('.')+4:]
+                        lss = ls.split()
+                        lsb = dtl[0:4]
+                        lse = dtl[5:]
+                        dtl = lsb+lss+lse
+                    try:
+                        stlist.append(SRPUtil.DAOStarPsfData(Exptime,dtl[0],dtl[1],dtl[2],dtl[5],dtl[6],dtl[7],dtl[8],dtl[3],dtl[4],zpl,airmass))
+                    except:
+                        print("Error in input file at line %d." % (i+1))
+        if options.verbose:
+            print("Photometry performed for %d objects." % len(stlist))
+        if ext == SRPConstants.DAOApPhot:
+            if options.skycat:
+                g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPApPhotDAOSky, SRPFiles.WriteMode)
+            else:
+                g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPApPhotDAO, SRPFiles.WriteMode)
+        else:
+            if options.skycat:
+                g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPPsfPhotDAOSky, SRPFiles.WriteMode)
+            else:
+                g = SRPFiles.SRPFile(SRPConstants.SRPLocalDir, root+SRPConstants.SRPPsfPhotDAO, SRPFiles.WriteMode)
+        g.SRPOpenFile()
+        if options.skycat:
+            g.SRPWriteFile("serv_type: catalog"+os.linesep)
+            g.SRPWriteFile("long_name: SRP catalog for file %s" % options.inputfilename+os.linesep)
+            if ext == SRPConstants.DAOApPhot:
+                g.SRPWriteFile("short_name: %s" % root+SRPConstants.SRPApPhotDAOSky+os.linesep)
+                g.SRPWriteFile("url: ./%s" % root+SRPConstants.SRPApPhotDAOSky+os.linesep)
+
+            else:
+                g.SRPWriteFile("short_name: %s" % root+SRPConstants.SRPPsfPhotDAOSky+os.linesep)
+                g.SRPWriteFile("url: ./%s" % root+SRPConstants.SRPPsfPhotDAOSky+os.linesep)
+            g.SRPWriteFile("id_col: 0"+os.linesep)
+            g.SRPWriteFile("x_col: 1"+os.linesep)
+            g.SRPWriteFile("y_col: 2"+os.linesep)
+            g.SRPWriteFile("symbol: {} circle 4"+os.linesep)
+            if ext == SRPConstants.DAOApPhot:
+                g.SRPWriteFile("Id\tX\tY\tSky\teSky\tSkySkew")
+                for ll in range(len(stlist[0].MagList)):
+                    g.SRPWriteFile("\tMag%d\teMag%d" % (ll+1,ll+1))
+                g.SRPWriteFile("\tAirmass")
+                g.SRPWriteFile(os.linesep)
+            else:
+                g.SRPWriteFile("Id\tX\tY\tSky\tnIt\tChi\tSharp")
+                g.SRPWriteFile("\tMag\teMag")
+                g.SRPWriteFile("\tAirmass"+os.linesep)
+            g.SRPWriteFile("---------"+os.linesep)
+        count = 0
+        for l in stlist:
+            if ext == SRPConstants.DAOApPhot:
+                if l.MagList[0] < SRPConstants.SRPMagErr:
+                    g.SRPWriteFile(str(l)+os.linesep)
+                    count = count + 1
+            else:
+                if l.Mag < SRPConstants.SRPMagErr:
+                    g.SRPWriteFile(str(l)+os.linesep)
+                    count = count + 1
+        if options.skycat:
+            g.SRPWriteFile("EOD"+os.linesep)
+        g.SRPCloseFile()
+        if options.verbose:
+            print("%d objects selected." % count)
+        if options.verbose:
+            if ext == SRPConstants.DAOApPhot:
+                if options.skycat:
+                    print("Results reported in file %s" % root+SRPConstants.SRPApPhotDAOSky)
+                else:
+                    print("Results reported in file %s" % root+SRPConstants.SRPApPhotDAO)
+            else:
+                if options.skycat:
+                    print("Results reported in file %s" % root+SRPConstants.SRPPsfPhotDAOSky)
+                else:
+                    print("Results reported in file %s" % root+SRPConstants.SRPPsfPhotDAO)
+    else:
+        parser.error("%s not found." % options.inputfilename)
+else:
+    parser.print_help()

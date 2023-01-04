@@ -1,0 +1,110 @@
+#! python
+""" Code to align roto-translated frames
+
+Context : SRP
+Module  : SRPFitsComposer.py
+Version : 1.0.2
+Author  : Stefano Covino
+Date    : 18/05/2017
+E-mail  : stefano.covino@brera.inaf.it
+URL:    : http://www.merate.mi.astro.it/users/covino
+Purpose : Manage the composition of FITS files.
+
+Usage   : SRPFitsComposer [-e arg1] -i arg2 -o arg3 [-v]
+            -e FITS file extension
+            -i Input FITS file list
+            -o Output FITS file
+
+History : (24/01/2014) First version.
+        : (25/03/2014) Deal with non standard FITS headers.
+        : (18/05/2017) Minor update.
+"""
+
+
+import os, sys
+from optparse import OptionParser
+from SRPFITS.Fits.GetHeaderValue import GetHeaderValue
+from astropy.io import fits
+import numpy
+
+
+
+parser = OptionParser(usage="usage: %prog [-e arg1] -i arg2 -o arg3 [-v]", version="%prog 1.0.2")
+parser.add_option("-e", "--ext", action="store", nargs=1, type="int", default=0, help="FITS file extension")
+parser.add_option("-i", "--inputlist", action="store", nargs=1, type="string", help="Input FITS file list")
+parser.add_option("-o", "--outfile", action="store", nargs=1, type="string", help="Output FITS file")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose", help="Fully describe operations")
+(options, args) = parser.parse_args()
+
+
+if options.inputlist and options.outfile:
+    if not os.path.isfile(options.inputlist):
+        parser.error("Input file list %s is not readable." % options.inputlist)
+    if options.ext < 0:
+        parser.error("FITS extension cannot be negative." )
+    #
+    if options.verbose:
+        print("Input FITS file list is: %s" % options.inputlist)
+        print("Output FITS file       : %s" % options.outfile)
+        print("FITS file extension    : %d" % options.ext)
+    # read inputfile
+    listfls = []
+    f = file(options.inputlist)
+    dt = f.readlines()
+    f.close()
+    totsizex = 0
+    totsizey = 0
+    minx = 0
+    miny = 0
+    for i in dt:
+        il = i.split()
+        try:
+            fnam = il[0]
+            x0 = int(float(il[1]))
+            y0 = int(float(il[2]))
+        except (IndexError, ValueError):
+            parser.error("Wrong input file format.")
+            sys.exit(SRPConstants.SRPExitFailure)
+        #
+        if x0 < minx:
+            minx = x0
+        if y0 < miny:
+            miny = y0
+        #
+        dimx = GetHeaderValue(fnam,'NAXIS1',options.ext)[0]
+        dimy = GetHeaderValue(fnam,'NAXIS2',options.ext)[0]
+        if dimx == None or dimy == None:
+            parser.error("FITS file %s nont readable or wrong extension." % fnam)
+        if dimx + abs(x0) > totsizex:
+            totsizex = dimx + abs(x0)
+        if dimy + abs(y0) > totsizey:
+            totsizey = dimy + abs(y0)
+        #
+        listfls.append((fnam,x0,y0,dimx,dimy))
+    #print totsizex, totsizey, minx, miny
+    # begin operations
+    outarray = numpy.zeros((totsizey,totsizex),dtype=numpy.float64)
+    #
+    for i in listfls:
+        hdu = fits.open(i[0])
+        hdut = hdu[0].data
+        if options.verbose:
+            print("Processing file: %s" % i[0])
+        #
+        startx = i[1]-minx
+        starty = i[2]-miny
+        #print startx, starty
+        #
+        outarray[starty:hdut.shape[0]+abs(starty),startx:hdut.shape[1]+abs(startx)] = hdut[:,:]
+        #
+        hdu[0].data = outarray
+        if options.verbose:
+            hdu.writeto(options.outfile,overwrite=True,output_verify='warn')
+        else:
+            hdu.writeto(options.outfile,overwrite=True,output_verify='ignore')
+        hdu.close()
+        #
+        if options.verbose:
+            print("Composed FITS file %s created." % options.outfile)
+else:
+    parser.print_help()
