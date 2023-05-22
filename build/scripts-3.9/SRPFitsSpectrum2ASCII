@@ -3,10 +3,10 @@
 
 Context : SRP
 Module  : SRPFitsSpectrum2ASCII.py
-Version : 1.0.1
+Version : 1.0.2
 Author  : Stefano Covino
-Date    : 18/05/2017
-E-mail  : stefano.covino@brera.inaf.it
+Date    : 02/12/2022
+E-mail  : stefano.covino@inaf.it
 URL:    : http://www.merate.mi.astro.it/utenti/covino
 
 Usage   : SRPFitsSpectrum2ASCII -f arg1 [-h] [-v]
@@ -15,6 +15,7 @@ Usage   : SRPFitsSpectrum2ASCII -f arg1 [-h] [-v]
 
 History : (22/09/2011) First version.
         : (18/05/2017) Minor update.
+        : (02/12/2022) Bug correction in scidata.
 """
 
 
@@ -92,10 +93,10 @@ if options.inputlist:
             # Extract spectrum
             lamb = []
             specl = []
-            for i in range(len(scidata[0])):
+            for i in range(len(scidata)):
                 lmb = ((i-refpix)*refdl + reflmb)
                 lamb.append(lmb)
-                specl.append(scidata[0][i])
+                specl.append(scidata[i])
             #
             root,ext = os.path.splitext(fr)
             newfile = root+SRPConstants.SRPASCIISpec

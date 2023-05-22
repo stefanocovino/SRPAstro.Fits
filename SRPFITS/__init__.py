@@ -2,9 +2,9 @@
 
 Context : SRP
 Module  : FITS
-Version : 1.9.2
+Version : 1.9.4
 Author  : Stefano Covino
-Date    : 02/12/2022
+Date    : 22/05/2023
 E-mail  : stefano.covino@inaf.it
 URL     : http://www.me.oa-brera.inaf.it/utenti/covino
 
@@ -75,9 +75,10 @@ History : (25/03/2014) First version.
         : (15/03/2022) V. 2.9.7.
         : (29/03/2022) V. 3.0.0beta.
         : (02/12/2022) V. 3.0.0.
+        : (22/05/2023) V. 3.0.1.
 """
 
-__version__ = '3.0.0'
+__version__ = '3.0.1'
 
 
 

@@ -2,10 +2,10 @@
 
 Context : SRP
 Module  : SRPGW
-Version : 1.0.2
+Version : 1.1.0
 Author  : Stefano Covino
-Date    : 03/07/2017
-E-mail  : stefano.covino@brera.inaf.it
+Date    : 22/05/2023
+E-mail  : stefano.covino@inaf.it
 URL:    : http://www.merate.mi.astro.it/utenti/covino
 
 Usage   : GetApPhot
@@ -15,6 +15,7 @@ Remarks :
 History : (18/12/2016) First version.
         : (21/12/2016) Minor bug.
         : (03/07/2017) size must be integer in computations.
+        : (22/05/2023) Deprecated numpy feature.
 """
 
 import numpy as np
@@ -29,8 +30,8 @@ def GetFWHM(x,y,fname,size=20):
     for ii,jj in zip(x,y):
         a = np.rint(ii)-1
         b = np.rint(jj)-1
-        i = a.astype(np.int)
-        l = b.astype(np.int)
+        i = a.astype(int)
+        l = b.astype(int)
         image = data[l-szint:l+szint,i-szint:i+szint]
         dat=image.flatten()
         try:

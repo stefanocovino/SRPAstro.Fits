@@ -20,7 +20,7 @@ import numpy
 from astropy.table import Table
 import sep
 from SRPFITS.Photometry.ApyPhot import ApyPhot
-from SRPFITS.Photometry.DaoPhot import DaoPhot
+#from SRPFITS.Photometry.DaoPhot import DaoPhot
 
 #from .GetData import GetData
 #from .GetHeader import GetHeader
@@ -121,7 +121,7 @@ class FitsPhotometry:
             return Table([self.X,self.Y,flux,fluxerr],names=('X','Y','Flux','eFlux'))
 
                        
-    def DaoPhotometry (self, rds=(5,10,15),backgr=True,gain=1.,ron=0.,skyalg='mmm'):
-            flux,fluxerr = DaoPhot (self.X,self.Y,self.Data,rds,backgr,gain,ron,skyalg)
-            return Table([self.X,self.Y,flux,fluxerr],names=('X','Y','Flux','eFlux'))
+    #def DaoPhotometry (self, rds=(5,10,15),backgr=True,gain=1.,ron=0.,skyalg='mmm'):
+    #        flux,fluxerr = DaoPhot (self.X,self.Y,self.Data,rds,backgr,gain,ron,skyalg)
+    #        return Table([self.X,self.Y,flux,fluxerr],names=('X','Y','Flux','eFlux'))
 

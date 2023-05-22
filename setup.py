@@ -52,6 +52,8 @@ setup(
     include_package_data=True,
     packages=find_packages(),
     python_requires='>=3',
+    #packages=['SRPFITS'],
+    #package_dir={'SRPFITS':'SRPFITS'},
     package_data={'SRPFITS':lsdtex},
     scripts=lscrex,
     install_requires=['SRPAstro >= 4.4', 'sep', 'photutils', 'astropy', 'astLib >= 0.11.5', 'astroalign'],

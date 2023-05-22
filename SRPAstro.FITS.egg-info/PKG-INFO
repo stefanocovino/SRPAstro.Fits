@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: SRPAstro.FITS
-Version: 3.0.0b0
+Version: 3.0.1
 Summary: Tools for handling FITS files under SRP
 Home-page: https://pypi.python.org/pypi/SRPAstro.FITS
 Author: Stefano Covino
